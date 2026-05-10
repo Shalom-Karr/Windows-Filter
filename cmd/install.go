@@ -131,7 +131,30 @@ func Install() error {
 
 	fmt.Println("skfilter installed and running.")
 	fmt.Println("Open http://localhost:8764 to set your password.")
+
+	// Pop a live status monitor in its own console window so the user can
+	// see the filter is alive. The status command is read-only — closing
+	// the window doesn't affect the running service.
+	spawnStatusWindow(exePath)
+
 	return nil
+}
+
+// spawnStatusWindow launches `skfilter.exe -status` in a fresh detached
+// console. Best-effort: a failure here is just cosmetic — the service is
+// already running and can be monitored by re-running -status manually.
+func spawnStatusWindow(exePath string) {
+	const CREATE_NEW_CONSOLE = 0x00000010
+	c := exec.Command(exePath, "-status")
+	c.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: CREATE_NEW_CONSOLE,
+	}
+	if err := c.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: status window:", err)
+		return
+	}
+	// Don't wait for it — it's its own process now.
+	_ = c.Process.Release()
 }
 
 // Uninstall verifies the dashboard password, then stops + deletes the service

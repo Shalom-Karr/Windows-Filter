@@ -26,6 +26,7 @@ func main() {
 	uninstall := flag.Bool("uninstall", false, "uninstall the service (prompts for password)")
 	dev := flag.Bool("dev", false, "run in foreground (development mode)")
 	test := flag.Bool("test", false, "5-minute self-disarming default-deny run (admin required)")
+	status := flag.Bool("status", false, "open a live status monitor window (read-only)")
 	flag.Parse()
 
 	switch {
@@ -43,6 +44,10 @@ func main() {
 		}
 	case *test:
 		if err := cmd.RunTest(); err != nil {
+			fail(err)
+		}
+	case *status:
+		if err := cmd.RunStatus(); err != nil {
 			fail(err)
 		}
 	default:
