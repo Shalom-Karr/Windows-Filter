@@ -140,18 +140,30 @@ func (n *NetshFirewall) SetDefaultOutboundBlock() error {
 	return nil
 }
 
-// filterIPs validates each IP and ensures it's the expected family. wantV4=true
-// keeps only IPv4 literals; wantV4=false keeps only IPv6.
-func filterIPs(ips []string, wantV4 bool) ([]string, error) {
-	out := make([]string, 0, len(ips))
-	for _, raw := range ips {
+// filterIPs validates each entry and ensures it's the expected family.
+// Accepts both plain IPs ("1.2.3.4", "::1") and CIDR ranges ("1.2.3.0/24",
+// "2001:db8::/32"). netsh advfirewall's `remoteip=` accepts either form, so
+// we pass them through unchanged after validation. wantV4=true keeps only
+// IPv4 entries; wantV4=false keeps only IPv6.
+func filterIPs(entries []string, wantV4 bool) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	for _, raw := range entries {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		ip := net.ParseIP(raw)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid IP %q", raw)
+		var ip net.IP
+		if strings.Contains(raw, "/") {
+			parsedIP, _, err := net.ParseCIDR(raw)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR %q: %w", raw, err)
+			}
+			ip = parsedIP
+		} else {
+			ip = net.ParseIP(raw)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid IP %q", raw)
+			}
 		}
 		isV4 := ip.To4() != nil
 		if wantV4 && !isV4 {

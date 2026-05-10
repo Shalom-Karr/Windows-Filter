@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Shalom-Karr/skfilter/internal/db"
@@ -123,11 +124,34 @@ func (rv *Resolver) ResolveAndApply(id int64) error {
 	return nil
 }
 
-// lookupBoth resolves the domain and splits results by family.
-func (rv *Resolver) lookupBoth(domain string) ([]string, []string, error) {
+// lookupBoth resolves the input and splits results by family. Input may be:
+//   - a hostname (github.com)            → DNS lookup, expand to all A/AAAA records
+//   - a single IP literal (1.2.3.4)      → returned as-is, no DNS call
+//   - a CIDR range (140.82.112.0/20)     → returned as-is, no DNS call
+//
+// The IP and CIDR paths exist so users can paste published CDN ranges (e.g.
+// Cloudflare's /ips-v4) once instead of fighting DNS rotation per-edge-IP.
+func (rv *Resolver) lookupBoth(input string) ([]string, []string, error) {
+	// Static IP / CIDR — no DNS round trip.
+	if isStaticIPOrCIDR(input) {
+		// Pull the address part out of a CIDR so we can pick the family.
+		probe := input
+		if slash := strings.Index(probe, "/"); slash >= 0 {
+			probe = probe[:slash]
+		}
+		ip := net.ParseIP(probe)
+		if ip == nil {
+			return nil, nil, fmt.Errorf("invalid IP / CIDR: %q", input)
+		}
+		if ip.To4() != nil {
+			return []string{input}, nil, nil
+		}
+		return nil, []string{input}, nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), rv.timeout)
 	defer cancel()
-	addrs, err := rv.resolver.LookupIP(ctx, "ip", domain)
+	addrs, err := rv.resolver.LookupIP(ctx, "ip", input)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -140,6 +164,15 @@ func (rv *Resolver) lookupBoth(domain string) ([]string, []string, error) {
 		}
 	}
 	return dedup(v4), dedup(v6), nil
+}
+
+// isStaticIPOrCIDR returns true if input is a literal IP or CIDR range.
+func isStaticIPOrCIDR(s string) bool {
+	if strings.Contains(s, "/") {
+		_, _, err := net.ParseCIDR(s)
+		return err == nil
+	}
+	return net.ParseIP(s) != nil
 }
 
 func dedup(in []string) []string {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -16,6 +17,23 @@ import (
 // hostnameRe — RFC-1035-ish hostname validation. Used by both
 // POST /api/rules and GET /api/check to reject anything weird.
 var hostnameRe = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
+
+// isValidAllowlistEntry accepts three forms:
+//   - hostname  (github.com)
+//   - IP        (140.82.121.4, 2001:db8::1)
+//   - CIDR      (140.82.112.0/20, 2001:db8::/32)
+//
+// Empty / malformed inputs return false. Domain matching is case-insensitive.
+func isValidAllowlistEntry(s string) bool {
+	if hostnameRe.MatchString(s) {
+		return true
+	}
+	if strings.Contains(s, "/") {
+		_, _, err := net.ParseCIDR(s)
+		return err == nil
+	}
+	return net.ParseIP(s) != nil
+}
 
 // ruleJSON is the wire shape for a Rule row.
 type ruleJSON struct {
@@ -68,8 +86,10 @@ func (s *server) handleAddRule(w http.ResponseWriter, r *http.Request) {
 	}
 	domain := strings.ToLower(strings.TrimSpace(req.Domain))
 	domain = strings.TrimSuffix(domain, ".")
-	if !hostnameRe.MatchString(domain) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain"})
+	if !isValidAllowlistEntry(domain) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid entry — expected a hostname (github.com), an IP (1.2.3.4), or a CIDR range (140.82.112.0/20)",
+		})
 		return
 	}
 

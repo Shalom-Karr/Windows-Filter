@@ -20,15 +20,19 @@
     <div id="banner" class="banner hidden"></div>
 
     <div class="card">
-        <h2>Add domain</h2>
+        <h2>Add entry</h2>
         <div class="add-row">
             <div style="flex:1; min-width:240px;">
-                <label for="add-domain">Domain (e.g. example.com)</label>
-                <input id="add-domain" type="text" autocomplete="off" placeholder="example.com">
+                <label for="add-domain">Hostname, IP, or CIDR</label>
+                <input id="add-domain" type="text" autocomplete="off" placeholder="github.com  /  1.2.3.4  /  140.82.112.0/20">
             </div>
             <button id="add-btn">Add to allowlist</button>
         </div>
-        <p class="muted" style="margin-top:10px">The service resolves the domain to IPs and adds a Windows Firewall allow rule. Re-resolution runs every 15 minutes.</p>
+        <p class="muted" style="margin-top:10px">
+            <strong>Hostname</strong> (e.g. <code>github.com</code>) — the service resolves it to IPs and refreshes every minute.<br>
+            <strong>IP</strong> (e.g. <code>140.82.121.4</code>) — added as a literal allow rule.<br>
+            <strong>CIDR</strong> (e.g. <code>140.82.112.0/20</code>) — best for CDN-fronted sites that rotate edge IPs (Cloudflare publishes <code>/ips-v4</code>, GitHub uses <code>140.82.112.0/20</code>, etc.).
+        </p>
     </div>
 
     <div class="card">
