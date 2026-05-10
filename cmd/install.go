@@ -14,6 +14,7 @@ import (
 	"github.com/Shalom-Karr/skfilter/internal/auth"
 	"github.com/Shalom-Karr/skfilter/internal/config"
 	"github.com/Shalom-Karr/skfilter/internal/db"
+	"github.com/Shalom-Karr/skfilter/internal/policies"
 
 	"golang.org/x/sys/windows/svc/mgr"
 	"golang.org/x/term"
@@ -92,6 +93,13 @@ func Install() error {
 		return fmt.Errorf("add loopback rule: %w", err)
 	}
 
+	// Browser lockdown — Chrome / Edge force-install + Incognito off,
+	// DevTools off, only-our-extension allowed, no new profiles. Non-fatal
+	// if it partly fails; the reconciler will keep trying on every tick.
+	if err := policies.WriteBrowserPolicies(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: write browser policies:", err)
+	}
+
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("start service: %w", err)
 	}
@@ -149,6 +157,11 @@ func Uninstall() error {
 		fmt.Fprintln(os.Stderr, "warning: restore default policy:", err)
 	}
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
+
+	// Strip the HKLM browser policy keys we installed. Best-effort.
+	if err := policies.RemoveBrowserPolicies(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: remove browser policies:", err)
+	}
 
 	fmt.Println("skfilter service removed and default firewall policy restored.")
 	fmt.Printf("State directory left intact at %s (delete manually if you want a clean slate).\n", config.DataDir())

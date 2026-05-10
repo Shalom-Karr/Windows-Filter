@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/Shalom-Karr/skfilter/internal/policies"
+
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -71,6 +73,13 @@ func EnsureInstalledAndRunning() error {
 		}
 	default:
 		fmt.Fprintf(os.Stdout, "skfilter service is in state %d.\n", status.State)
+	}
+
+	// Re-apply browser policies so we self-heal if a user yanked the keys
+	// since the last install/restart. Non-fatal — the reconciler also
+	// re-asserts these on every tick once the service is up.
+	if err := policies.WriteBrowserPolicies(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: write browser policies:", err)
 	}
 
 	fmt.Println("Dashboard: http://localhost:8764")

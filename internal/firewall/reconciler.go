@@ -20,6 +20,9 @@ type Reconciler struct {
 	fw                 Firewall
 	interval           time.Duration
 	enforceDefaultDeny bool
+	policyRepairer     func() error
+	lastPolicyErr      string // last non-nil err message, used to dedupe audit entries
+	policyHealthy      bool   // last known good/bad state, drives transition audits
 }
 
 // ReconcilerOptions tunes the reconciler. Zero values are safe for dev mode.
@@ -34,6 +37,13 @@ type ReconcilerOptions struct {
 	// reconciler keeps it pinned). Set false in dev mode so dashboards can
 	// be tested without elevation.
 	EnforceDefaultDeny bool
+
+	// PolicyRepairer, when non-nil, is invoked on every tick (after the
+	// firewall reconciliation) to re-assert HKLM browser policy keys. The
+	// runtime wires this to cmd/internal-policies WriteBrowserPolicies so
+	// the firewall package itself stays free of registry / cmd imports.
+	// Only invoked when EnforceDefaultDeny is true (service mode).
+	PolicyRepairer func() error
 }
 
 // NewReconciler builds a reconciler. Pass options to tune.
@@ -47,6 +57,8 @@ func NewReconciler(store *db.Store, fw Firewall, opts ReconcilerOptions) *Reconc
 		fw:                 fw,
 		interval:           interval,
 		enforceDefaultDeny: opts.EnforceDefaultDeny,
+		policyRepairer:     opts.PolicyRepairer,
+		policyHealthy:      true, // optimistic; first failure flips it
 	}
 }
 
@@ -139,6 +151,32 @@ func (r *Reconciler) tick() {
 			return
 		}
 		_ = r.store.Audit.Log("reconciler", "policy_drift_recovered", map[string]any{"observed": cur})
+	}
+
+	// Browser policy keys (HKLM Chrome/Edge force-install + lockdown).
+	// We re-assert on every tick — registry writes are cheap and idempotent.
+	// Audit log fires only on state transitions (healthy → failing, failing
+	// → healthy) so we don't spam an entry every 5s.
+	if r.policyRepairer != nil {
+		err := r.policyRepairer()
+		switch {
+		case err == nil && !r.policyHealthy:
+			_ = r.store.Audit.Log("reconciler", "policy_keys_repaired", map[string]any{
+				"previous_err": r.lastPolicyErr,
+			})
+			r.policyHealthy = true
+			r.lastPolicyErr = ""
+		case err != nil && r.policyHealthy:
+			r.policyHealthy = false
+			r.lastPolicyErr = err.Error()
+			_ = r.store.Audit.Log("reconciler", "policy_keys_repair_failed", map[string]any{
+				"err": err.Error(),
+			})
+			slog.Warn("reconciler: policy repair", "err", err)
+		case err != nil && !r.policyHealthy:
+			// Still failing with possibly a new message; just track it.
+			r.lastPolicyErr = err.Error()
+		}
 	}
 }
 

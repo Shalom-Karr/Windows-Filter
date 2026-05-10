@@ -3,6 +3,7 @@
   "name": "skfilter",
   "description": "Companion extension for skfilter — redirects to the local dashboard when a site is not on the allowlist.",
   "version": "0.1.0",
+  "key": "REPLACE_BEFORE_FIRST_RELEASE_base64_SubjectPublicKeyInfo_from_pack-crx_output",
   "background": { "service_worker": "background.js" },
   "permissions": ["webNavigation", "storage"],
   "host_permissions": ["<all_urls>", "http://localhost:8764/*", "http://127.0.0.1:8764/*"],

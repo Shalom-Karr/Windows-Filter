@@ -1,0 +1,91 @@
+name: extension-release
+
+# Packs extension/ into a signed CRX3 + update.xml and commits both into web/
+# so Cloudflare Pages picks them up on the next push.
+#
+# Triggers on any change under extension/ or tools/pack-crx/ on main, plus
+# manual workflow_dispatch.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extension/**'
+      - 'tools/pack-crx/**'
+      - '.github/workflows/extension-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to commit the rebuilt .crx + update.xml back to main
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The auto-commit step pushes back to the same branch.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Check for signing key
+        id: keycheck
+        env:
+          EXTENSION_SIGNING_KEY: ${{ secrets.EXTENSION_SIGNING_KEY }}
+        run: |
+          if [ -z "${EXTENSION_SIGNING_KEY:-}" ]; then
+            echo "::warning::EXTENSION_SIGNING_KEY secret is not set."
+            echo ""
+            echo "    Set up the EXTENSION_SIGNING_KEY repo secret."
+            echo "    See tools/pack-crx/README.md for the one-time keypair-generation flow."
+            echo ""
+            echo "Skipping pack step; CI exits clean so the rest of the repo still passes."
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write key to temp file
+        if: steps.keycheck.outputs.have_key == 'true'
+        env:
+          EXTENSION_SIGNING_KEY: ${{ secrets.EXTENSION_SIGNING_KEY }}
+        run: |
+          umask 077
+          # printf '%s\n' guarantees a trailing newline regardless of how the secret
+          # was pasted into the GitHub UI. PEM parsers (Go's pem.Decode included)
+          # tolerate a missing trailing newline, but belt-and-suspenders.
+          printf '%s\n' "$EXTENSION_SIGNING_KEY" > "$RUNNER_TEMP/skfilter-extension.pem"
+
+      - name: Pack extension
+        if: steps.keycheck.outputs.have_key == 'true'
+        run: |
+          go run ./tools/pack-crx \
+            -key="$RUNNER_TEMP/skfilter-extension.pem" \
+            -src=./extension \
+            -out=./web \
+            -url=https://skfilter.pages.dev/skfilter.crx
+
+      - name: Extract version for commit message
+        if: steps.keycheck.outputs.have_key == 'true'
+        id: version
+        run: |
+          V=$(jq -r '.version' extension/manifest.json)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Commit rebuilt artifacts if changed
+        if: steps.keycheck.outputs.have_key == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'ext: rebuild .crx for v${{ steps.version.outputs.version }}'
+          file_pattern: 'web/skfilter.crx web/update.xml'
+          # web/.gitignore lists these files for local dev; force-add so the bot
+          # can still publish them to the branch Cloudflare Pages deploys from.
+          add_options: '-f'
+          commit_user_name: 'skfilter-bot'
+          commit_user_email: 'skfilter-bot@users.noreply.github.com'

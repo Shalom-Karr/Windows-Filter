@@ -16,6 +16,7 @@ import (
 	"github.com/Shalom-Karr/skfilter/internal/db"
 	"github.com/Shalom-Karr/skfilter/internal/firewall"
 	"github.com/Shalom-Karr/skfilter/internal/httpapi"
+	"github.com/Shalom-Karr/skfilter/internal/policies"
 	"github.com/Shalom-Karr/skfilter/internal/resolver"
 
 	"golang.org/x/sys/windows/svc"
@@ -125,9 +126,13 @@ func runMainLoop(ctx context.Context, mode runMode) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		firewall.NewReconciler(store, fw, firewall.ReconcilerOptions{
+		recOpts := firewall.ReconcilerOptions{
 			EnforceDefaultDeny: mode.enforceDefaultDeny,
-		}).Run(ctx)
+		}
+		if mode.enforceDefaultDeny {
+			recOpts.PolicyRepairer = policies.WriteBrowserPolicies
+		}
+		firewall.NewReconciler(store, fw, recOpts).Run(ctx)
 	}()
 	go func() {
 		defer wg.Done()
