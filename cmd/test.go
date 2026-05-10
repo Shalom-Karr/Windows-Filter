@@ -15,6 +15,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/Shalom-Karr/skfilter/internal/config"
+	"github.com/Shalom-Karr/skfilter/internal/db"
 )
 
 const testDuration = 5 * time.Minute
@@ -64,6 +67,10 @@ func RunTest() error {
 		fmt.Fprintln(os.Stderr, "warning: add self-program rule:", err)
 	}
 
+	// Enable Windows Firewall logging so the user can see every allow/drop
+	// decision in real time. Disabled on cleanup.
+	enableFirewallLogging()
+
 	// Always restore on exit, no matter how we leave.
 	cleanup := func() {
 		fmt.Println()
@@ -77,6 +84,7 @@ func RunTest() error {
 		}
 		_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
 		_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
+		disableFirewallLogging()
 	}
 	defer cleanup()
 
@@ -91,6 +99,17 @@ func RunTest() error {
 	fmt.Printf("Dashboard: http://localhost:8764\n")
 	fmt.Printf("Auto-revert at: %s\n", time.Now().Add(testDuration).Format(time.Kitchen))
 	fmt.Println("Press Ctrl-C to revert sooner.")
+
+	// Open a read-only Store handle for the firewall-log tailer's IP→domain
+	// lookups. Separate from the one runMainLoop opens — SQLite handles
+	// concurrent readers cleanly.
+	store, err := db.Open(config.DBPath())
+	if err == nil {
+		defer store.Close()
+		go tailFirewallLog(ctx, store)
+	} else {
+		fmt.Fprintln(os.Stderr, "warning: firewall-log tailer disabled (db open failed):", err)
+	}
 
 	if err := runMainLoop(ctx, runMode{enforceDefaultDeny: true}); err != nil {
 		return fmt.Errorf("test loop: %w", err)
