@@ -159,7 +159,7 @@ Build and test each phase end-to-end before the next.
 - `skfilter.exe -install`:
    1. Installs as auto-start `LocalSystem` service.
    2. Sets `sc failure skfilter reset= 0 actions= restart/5000` (auto-restart with 5s delay).
-   3. Runs `netsh advfirewall set allprofiles firewallpolicy blockinboundalways,blockoutbound` (this is the only place default-deny is touched — never exposed in dashboard).
+   3. Runs `netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound` (this is the only place default-deny is touched — never exposed in dashboard).
    4. Adds an `skfilter_self_loopback` rule allowing outbound to `127.0.0.1` so the dashboard reaches the service.
 - `skfilter.exe -uninstall` — prompts for the dashboard password, then removes service, restores default firewall policy.
 - **Verify**: install, reboot, confirm dashboard reaches without manual start; uninstall, confirm clean removal.
@@ -207,7 +207,7 @@ The base plan is "medium bypass resistance" — anything an Administrator can do
 ### Admin running `netsh advfirewall reset` or stopping the service
 
 1. **Service-process watchdog (Phase 7a — easy, ~30 lines)**
-   The service itself, every 30 seconds, asserts that the default-outbound policy is still `block`. If it's not, it reapplies `blockinboundalways,blockoutbound` and writes an `audit_log` entry tagged `policy_drift_recovered`.
+   The service itself, every 30 seconds, asserts that the default-outbound policy is still `block`. If it's not, it reapplies `blockinbound,blockoutbound` and writes an `audit_log` entry tagged `policy_drift_recovered`.
 
 2. **Scheduled-task watchdog (Phase 7b — moderate, ~80 lines)**
    `skfilter.exe -install` registers a Task Scheduler entry `skfilter_watchdog` running as `SYSTEM`, trigger = every 1 minute. If `skfilter` service isn't running, `Start-Service skfilter`. Stopping the service via `services.msc` brings it back within 60s.

@@ -136,11 +136,17 @@ func (n *NetshFirewall) GetDefaultOutbound() (string, error) {
 	return parseDefaultOutbound(string(out)), nil
 }
 
-// SetDefaultOutboundBlock applies block-inbound + block-outbound across all profiles.
+// SetDefaultOutboundBlock applies block-inbound + block-outbound across all
+// profiles. NOTE: we use "blockinbound" not "blockinboundalways" — the
+// "always" variant overrides every inbound allow rule too, which kills
+// RDP / SSH / any service the machine actually wants to expose. The plain
+// "blockinbound" blocks unsolicited inbound by default but lets inbound
+// allow rules (like the built-in "Remote Desktop" rule) punch through,
+// which is the only sane default on a remotely-managed VPS.
 func (n *NetshFirewall) SetDefaultOutboundBlock() error {
 	if _, err := n.run(
 		"advfirewall", "set", "allprofiles",
-		"firewallpolicy", "blockinboundalways,blockoutbound",
+		"firewallpolicy", "blockinbound,blockoutbound",
 	); err != nil {
 		return fmt.Errorf("firewall.SetDefaultOutboundBlock: %w", err)
 	}

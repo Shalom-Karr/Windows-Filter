@@ -74,8 +74,9 @@ func Install() error {
 		fmt.Fprintln(os.Stderr, "warning: SetRecoveryActions:", err)
 	}
 
-	// Default-deny outbound. This is the only place this is touched.
-	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinboundalways,blockoutbound"); err != nil {
+	// Default-deny outbound. "blockinbound" (not "blockinboundalways") so
+	// inbound allow rules (RDP, SSH, etc.) still work on a VPS.
+	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"); err != nil {
 		return fmt.Errorf("apply default-deny: %w", err)
 	}
 

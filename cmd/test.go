@@ -38,9 +38,11 @@ func RunTest() error {
 	}
 	fmt.Printf("Saving current default-outbound policy: %s\n", prev)
 
-	// Apply default-deny.
+	// Apply default-deny. Use "blockinbound" (not "blockinboundalways") so
+	// inbound services still work (RDP / SSH on a VPS); we only care about
+	// gating OUTBOUND.
 	fmt.Println("Applying default-deny outbound for the next 5 minutes...")
-	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinboundalways,blockoutbound"); err != nil {
+	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"); err != nil {
 		return fmt.Errorf("apply default-deny: %w", err)
 	}
 	// Loopback allow so the dashboard works.

@@ -66,7 +66,7 @@ Remove-Item -Recurse -Force "$env:PROGRAMDATA\skfilter" -ErrorAction SilentlyCon
 
 ```powershell
 # Set default-deny manually for this test (the installer normally does this for you):
-netsh advfirewall set allprofiles firewallpolicy blockinboundalways,blockoutbound
+netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound
 
 # Run skfilter in dev mode AS ADMIN:
 .\skfilter.exe -dev
@@ -146,7 +146,7 @@ This actually flips the default-deny outbound on your machine. **Have an Admin s
 
 What should happen:
 1. The `skfilter` service is registered with auto-start.
-2. `netsh advfirewall set allprofiles firewallpolicy blockinboundalways,blockoutbound` runs.
+2. `netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound` runs.
 3. The `skfilter_self_loopback` allow rule is added (lets the dashboard reach the local service).
 4. Service starts.
 5. Console prints "open http://localhost:8764 to set your password."
@@ -167,7 +167,26 @@ To remove cleanly:
 # Prompts for the dashboard password.
 ```
 
-That stops the service, restores `notconfigured,allowoutbound` (default Windows firewall), removes our rules. Audit log + DB are preserved at `%PROGRAMDATA%\skfilter\` for review — delete it manually if you want a clean slate.
+That stops the service, restores `notconfigured,allowoutbound` (default Windows firewall), removes our rules, and calls `RemoveBrowserPolicies()` to strip the HKLM Chrome / Edge lockdown keys (Incognito off, force-installed extension, etc.) the installer added. Audit log + DB are preserved at `%PROGRAMDATA%\skfilter\` for review — delete it manually if you want a clean slate.
+
+---
+
+## What "Run as administrator" actually does
+
+Double-clicking `skfilter.exe` (or right-clicking → Run as administrator) with no flags is the canonical "set this up on a fresh machine" path. The binary checks for admin, and then on the admin path it:
+
+- Registers `skfilter` as an **auto-start Windows service** running as `LocalSystem` (so the firewall is enforced from boot, before any user logs in)
+- Sets `sc failure` recovery to **auto-restart 3× with 5-second delays** between attempts (so killing the process from Task Manager just brings it back)
+- Applies `netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound` — flips the default outbound policy to deny
+- Adds the `skfilter_self_loopback` allow rule so the service can reach its own dashboard on 127.0.0.1:8764
+- Writes **HKLM Chrome / Edge policy keys** for: extension force-install (pinned to `https://skfilter.pages.dev/update.xml`), extension allowlist (only ours can load), extension blocklist (`*`), Incognito off, DevTools off (`DeveloperToolsAvailability=2`), no new profiles (`BrowserAddPersonEnabled=0`), no guest mode (`BrowserGuestModeEnabled=0`)
+- Starts the service
+
+The Phase 7h reconciler re-asserts the registry policy keys on every 5-second tick — if a user deletes a key in `regedit`, it comes back almost immediately, and an `audit_log` entry tagged `policy_keys_repaired` is recorded.
+
+Re-running `skfilter.exe` (as admin) on an already-installed machine is fast and idempotent: it confirms the service is running (starts it if not), re-applies the browser policies, prints "Dashboard: http://localhost:8764" and exits.
+
+If the extension build pipeline hasn't produced `extension/extension-id.txt` yet, the force-install / allowlist / blocklist keys are skipped (with a warning to stderr) — the lockdown keys (Incognito off, DevTools off, no new profiles) still get written.
 
 ---
 
