@@ -21,9 +21,9 @@ The firewall itself does the actual blocking — the extension is only there for
 
 On every navigation:
 1. The background script extracts the destination hostname.
-2. It hits `https://127.0.0.1:8765/api/check?domain=<host>` on the local dashboard.
-3. If the dashboard says `allowed: false`, the tab is redirected to `https://127.0.0.1:8765/blocked?url=<original>`.
+2. It hits `http://localhost:8764/api/check?domain=<host>` on the local dashboard.
+3. If the dashboard says `allowed: false`, the tab is redirected to `http://localhost:8764/blocked?url=<original>`.
 
 If the dashboard is unreachable, the extension does nothing — your local firewall is still the real enforcement.
 
-The first time you hit the dashboard you'll see a self-signed cert warning. Click through once per browser; the extension caches its own connection.
+The dashboard runs over plain HTTP on the loopback interface — no cert warnings.

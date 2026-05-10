@@ -4,7 +4,7 @@
 // dashboard's /blocked page. The Windows firewall does the real enforcement;
 // this exists purely so the user sees a friendly page instead of a timeout.
 
-const DASHBOARD = 'https://127.0.0.1:8765';
+const DASHBOARD = 'http://localhost:8764';
 const CACHE_TTL_MS = 30 * 1000;
 const cache = new Map(); // hostname -> { allowed: bool, expires: number }
 

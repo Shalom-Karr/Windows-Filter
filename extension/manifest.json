@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "background": { "service_worker": "background.js" },
   "permissions": ["webNavigation", "storage"],
-  "host_permissions": ["<all_urls>", "https://127.0.0.1:8765/*"],
+  "host_permissions": ["<all_urls>", "http://localhost:8764/*", "http://127.0.0.1:8764/*"],
   "icons": {
     "16":  "icons/icon16.png",
     "48":  "icons/icon48.png",

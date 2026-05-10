@@ -13,16 +13,41 @@ import (
 
 // Reconciler is Phase 7h: every interval, it diffs the SQLite-declared
 // allowlist against what Windows Defender Firewall actually has and rewrites
-// any drift. It also re-asserts the default-deny outbound policy.
+// any drift. It also re-asserts the default-deny outbound policy when
+// EnforceDefaultDeny is true (production / service mode).
 type Reconciler struct {
-	store    *db.Store
-	fw       Firewall
-	interval time.Duration
+	store              *db.Store
+	fw                 Firewall
+	interval           time.Duration
+	enforceDefaultDeny bool
 }
 
-// NewReconciler builds a reconciler with a 10-second tick.
-func NewReconciler(store *db.Store, fw Firewall) *Reconciler {
-	return &Reconciler{store: store, fw: fw, interval: 10 * time.Second}
+// ReconcilerOptions tunes the reconciler. Zero values are safe for dev mode.
+type ReconcilerOptions struct {
+	// Interval between ticks. Defaults to 5s if zero. Floor with the
+	// netsh-shell-out approach is ~5s; below that the box wastes CPU on
+	// netsh parsing without gaining real-time-ness.
+	Interval time.Duration
+	// EnforceDefaultDeny re-applies blockoutbound on every tick if the
+	// firewall's default policy has drifted. Requires admin. Set true in
+	// service mode (the installer set the policy at install time and the
+	// reconciler keeps it pinned). Set false in dev mode so dashboards can
+	// be tested without elevation.
+	EnforceDefaultDeny bool
+}
+
+// NewReconciler builds a reconciler. Pass options to tune.
+func NewReconciler(store *db.Store, fw Firewall, opts ReconcilerOptions) *Reconciler {
+	interval := opts.Interval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	return &Reconciler{
+		store:              store,
+		fw:                 fw,
+		interval:           interval,
+		enforceDefaultDeny: opts.EnforceDefaultDeny,
+	}
 }
 
 // Run blocks until ctx is canceled, ticking once immediately and then every
@@ -97,7 +122,12 @@ func (r *Reconciler) tick() {
 		_ = r.store.Audit.Log("reconciler", "rogue_rule_deleted", map[string]any{"name": name})
 	}
 
-	// Default-policy drift.
+	// Default-policy drift — only enforced when EnforceDefaultDeny is on.
+	// In dev mode this is skipped so the user can test the dashboard
+	// without admin privileges.
+	if !r.enforceDefaultDeny {
+		return
+	}
 	cur, err := r.fw.GetDefaultOutbound()
 	if err != nil {
 		slog.Error("reconciler: read default policy", "err", err)

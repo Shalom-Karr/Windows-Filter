@@ -26,7 +26,7 @@ type Deps struct {
 
 // Mount returns the dashboard + API as a single http.Handler.
 //
-// The caller binds this to 127.0.0.1:8765 over TLS.
+// The caller binds this to 127.0.0.1:8764 over plain HTTP (loopback only).
 func Mount(d Deps) http.Handler {
 	srv := &server{deps: d}
 	srv.checkLimiter = newIPRateLimiter(10, 10) // 10 req/s burst 10

@@ -54,7 +54,7 @@ func Install() error {
 		ErrorControl: mgr.ErrorNormal,
 		BinaryPathName: exePath,
 		DisplayName:    serviceDisplay,
-		Description:    "Default-deny outbound firewall with a per-domain allowlist managed at https://127.0.0.1:8765.",
+		Description:    "Default-deny outbound firewall with a per-domain allowlist managed at http://localhost:8764.",
 	}
 	s, err := m.CreateService(serviceName, exePath, cfg)
 	if err != nil {
@@ -97,8 +97,7 @@ func Install() error {
 	}
 
 	fmt.Println("skfilter installed and running.")
-	fmt.Println("Open https://127.0.0.1:8765 to set your password.")
-	fmt.Println("(The browser will warn about the self-signed cert — proceed past it.)")
+	fmt.Println("Open http://localhost:8764 to set your password.")
 	return nil
 }
 

@@ -1,6 +1,6 @@
 # skfilter
 
-A Windows-only allowlist firewall driven by `netsh advfirewall`, paired with a password-gated local HTTPS dashboard at `https://127.0.0.1:8765`. Default-deny outbound; only domains you've explicitly added can be reached. A companion browser extension redirects blocked navigations to the dashboard's "Request access" page.
+A Windows-only allowlist firewall driven by `netsh advfirewall`, paired with a password-gated local HTTP dashboard at `http://localhost:8764` (loopback only — never reachable off the machine). Default-deny outbound; only domains you've explicitly added can be reached. A companion browser extension redirects blocked navigations to the dashboard's "Request access" page.
 
 See [`Plan.md`](./Plan.md) for the full architecture, scope, bypass-resistance audit, and roadmap.
 
@@ -44,8 +44,8 @@ This is the fastest way to confirm the dashboard, DB, auth, and HTTP API work en
 
 What should happen:
 
-1. Console prints `serving on https://127.0.0.1:8765`.
-2. Open `https://127.0.0.1:8765/` in your browser. Click through the self-signed cert warning ("Advanced → Proceed to 127.0.0.1").
+1. Console prints `serving on http://localhost:8764`.
+2. Open `http://localhost:8764/` in your browser. No cert warnings — the dashboard runs over plain HTTP on the loopback interface.
 3. You land on `/setup`. Set a password (≥ 8 chars).
 4. You're redirected to `/`. Empty rules list, "Add domain…" textbox at the top.
 
@@ -115,7 +115,7 @@ netsh advfirewall set allprofiles firewallpolicy notconfigured,allowoutbound
 netsh advfirewall show allprofiles state | findstr "Outbound"
 ```
 
-Output: `Outbound connections that do not match a rule are blocked` — reconciler restored default-deny. Check `https://127.0.0.1:8765/audit` — there should be `policy_drift_recovered` and any `rogue_rule_deleted` entries.
+Output: `Outbound connections that do not match a rule are blocked` — reconciler restored default-deny. Check `http://localhost:8764/audit` — there should be `policy_drift_recovered` and any `rogue_rule_deleted` entries.
 
 ---
 
@@ -125,7 +125,7 @@ Output: `Outbound connections that do not match a rule are blocked` — reconcil
 2. Chrome / Edge: open `chrome://extensions`, enable **Developer mode** (top-right toggle), click **Load unpacked**, pick the `extension/` folder.
 3. Confirm the extension shows up with `Service worker` link active.
 4. Try to visit `https://reddit.com` (or any site not on the allowlist).
-5. Expected: tab redirects to `https://127.0.0.1:8765/blocked?url=https%3A%2F%2Freddit.com%2F`.
+5. Expected: tab redirects to `http://localhost:8764/blocked?url=https%3A%2F%2Freddit.com%2F`.
 6. The "Request access" page shows the blocked domain. If you're logged in, click **Add to allowlist** — the rule's added, audit log gets an entry, and you can navigate to reddit.com.
 
 If the extension doesn't redirect, check the service worker console:
@@ -149,7 +149,7 @@ What should happen:
 2. `netsh advfirewall set allprofiles firewallpolicy blockinboundalways,blockoutbound` runs.
 3. The `skfilter_self_loopback` allow rule is added (lets the dashboard reach the local service).
 4. Service starts.
-5. Console prints "open https://127.0.0.1:8765 to set your password."
+5. Console prints "open http://localhost:8764 to set your password."
 
 Verify the service is healthy:
 
@@ -158,7 +158,7 @@ Get-Service skfilter
 sc.exe qc skfilter
 ```
 
-Reboot the machine. After login, browser → `https://127.0.0.1:8765` should load without manually starting anything.
+Reboot the machine. After login, browser → `http://localhost:8764` should load without manually starting anything.
 
 To remove cleanly:
 
@@ -176,9 +176,9 @@ That stops the service, restores `notconfigured,allowoutbound` (default Windows 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | `go build` errors about missing packages | `go.sum` not yet populated | `go mod tidy` then rebuild |
-| Dashboard shows cert warning every time | Self-signed cert (expected) | Click through once, or `certutil -addstore Root %PROGRAMDATA%\skfilter\tls\cert.pem` to trust it |
+| Browser refuses to connect | Service not running, or another app already on port 8764 | `Get-Process -Name skfilter` and `netstat -ano | findstr :8764` |
 | `netsh: rule cannot be added` when adding a rule | Not running as Administrator | Re-run `skfilter.exe -dev` in an Admin shell |
-| Browser extension never redirects | Service worker can't reach 127.0.0.1:8765 | Confirm dashboard loads in a normal browser tab; check the service worker console |
+| Browser extension never redirects | Service worker can't reach localhost:8764 | Confirm dashboard loads in a normal browser tab; check the service worker console |
 | `skfilter -install` fails with "service exists" | Previous install left behind | `sc.exe delete skfilter`, then re-run install |
 | Locked out — forgot password | DB has bcrypt-hashed password | `Stop-Service skfilter; Remove-Item -Recurse -Force $env:PROGRAMDATA\skfilter; Start-Service skfilter` → setup screen reappears |
 | Whole machine has no network after install | Default-deny is doing its job | Add the rules you actually need via dashboard, OR run `.\skfilter.exe -uninstall` from an Admin shell to fully revert |

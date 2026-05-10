@@ -16,8 +16,12 @@ func RunDev() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	slog.Info("skfilter -dev starting", "addr", "https://"+listenAddr)
-	if err := runMainLoop(ctx); err != nil {
+	slog.Info("skfilter -dev starting", "addr", "http://"+listenAddr)
+	// Dev mode: do NOT enforce default-deny — that requires admin and would
+	// spam the log with elevation errors. Test the dashboard freely; flip the
+	// firewall manually in a separate Admin shell when you want to test rule
+	// enforcement.
+	if err := runMainLoop(ctx, runMode{enforceDefaultDeny: false}); err != nil {
 		return fmt.Errorf("dev loop: %w", err)
 	}
 	slog.Info("skfilter -dev stopped")

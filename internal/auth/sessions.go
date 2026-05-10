@@ -23,7 +23,9 @@ type Sessions struct {
 }
 
 // NewSessions builds a CookieStore signed with signingKey. The cookie is
-// HttpOnly + Secure (the dashboard is HTTPS-only) + SameSite=Lax.
+// HttpOnly + SameSite=Lax. Secure=false because the dashboard runs on plain
+// HTTP at 127.0.0.1:8764 — the connection never leaves the loopback
+// interface, so we don't need (and can't get) browser-confirmed TLS.
 func NewSessions(signingKey []byte) *Sessions {
 	if len(signingKey) == 0 {
 		panic("auth.NewSessions: empty signing key")
@@ -33,7 +35,7 @@ func NewSessions(signingKey []byte) *Sessions {
 		Path:     cookiePathRoot,
 		MaxAge:   maxAgeSeconds,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		SameSite: http.SameSiteLaxMode,
 	}
 	return &Sessions{store: store}

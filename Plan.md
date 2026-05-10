@@ -7,8 +7,8 @@ Self-imposed website filter for **this Windows machine**. After scoping conversa
 - **Use case**: "only allow websites I built myself" → default-deny outbound + an IP allowlist of the user's own sites. The whole HTTPS / DoH / SNI / MITM rabbit hole is sidestepped because we're not doing domain filtering of third-party traffic.
 - **Filter mechanism**: Windows Defender Firewall driven by `netsh advfirewall`. No kernel driver, no WinDivert, no MITM.
 - **Single Go binary** running as a Windows service (`LocalSystem`) so it can call `netsh` without admin prompts.
-- **Local HTTPS dashboard** at `https://127.0.0.1:8765`, password-gated, and **ONLY** lets the user add or remove allowed sites (no default-deny toggle exposed — that's set once at install and stays set).
-- **Redirect-on-block UX**: when the user navigates to a blocked site, they should land on `https://127.0.0.1:8765/blocked?url=<original>` with a one-click "Request access" button that, after password confirmation, adds the site to the allowlist.
+- **Local HTTP dashboard** at `http://localhost:8764` (loopback-only, plain HTTP — never leaves the machine), password-gated, and **ONLY** lets the user add or remove allowed sites (no default-deny toggle exposed — that's set once at install and stays set).
+- **Redirect-on-block UX**: when the user navigates to a blocked site, they should land on `http://localhost:8764/blocked?url=<original>` with a one-click "Request access" button that, after password confirmation, adds the site to the allowlist.
 - **IP source**: enter a domain, the service resolves it at request time and re-resolves on a schedule, keeping the netsh rule in sync.
 - **Audit log**: yes — every login attempt, rule add/remove, IP-refresh is appended to `audit_log` and viewable on the dashboard.
 
@@ -24,7 +24,7 @@ Extension's onBeforeRequest fires, asks the local service: "is example.com allow
    │
    ├── YES → return; browser proceeds normally; firewall allows the IP because it's in the netsh rule
    │
-   └── NO  → redirect the tab to https://127.0.0.1:8765/blocked?url=https://example.com
+   └── NO  → redirect the tab to http://localhost:8764/blocked?url=https://example.com
                                          │
                                          ▼
                             Dashboard "Blocked" page:
@@ -49,13 +49,13 @@ Result: zero MITM, no CA install, no DoH issue, no SNI inspection. The extension
                    └────────────────▲────────────────────┘
                                     │  netsh advfirewall ...
                                     │
-Browser ──HTTPS──> 127.0.0.1:8765 ──┤  (Go service, LocalSystem)
-       (extension                   │  ├── chi router + bcrypt + sessions
-        redirects on               │  ├── SQLite (modernc.org/sqlite)
-        blocked sites)              │  ├── DNS resolver goroutine (15-min tick)
-                                    │  └── netsh wrapper
-                                    │
-Browser extension ──HTTPS──> 127.0.0.1:8765/api/check?domain=…   (rate-limited, unauth, read-only)
+Browser ──HTTP──> localhost:8764 ────┤  (Go service, LocalSystem)
+       (extension                    │  ├── chi router + bcrypt + sessions
+        redirects on                 │  ├── SQLite (modernc.org/sqlite)
+        blocked sites)               │  ├── DNS resolver goroutine (15-min tick)
+                                     │  └── netsh wrapper
+                                     │
+Browser extension ──HTTP──> localhost:8764/api/check?domain=…   (rate-limited, unauth, read-only)
 ```
 
 Three components, all in one repo:
@@ -113,7 +113,7 @@ Filter/
 │           ├── app.js               ← vanilla JS, no framework
 │           └── styles.css           ← dark-slate (#0f172a / #1e293b), match Luach admin aesthetic
 └── extension/
-    ├── manifest.json                ← MV3, declares 127.0.0.1:8765 as host_permissions
+    ├── manifest.json                ← MV3, declares localhost:8764 as host_permissions
     ├── background.js                ← onBeforeRequest → fetch /api/check → redirect on block
     ├── icons/
     └── README.md                    ← "drag this folder into chrome://extensions, Developer Mode = on"
@@ -137,10 +137,10 @@ Build and test each phase end-to-end before the next.
 
 ### Phase 1 — Dev-mode service + first-run password
 - `go.mod`, `main.go` dispatching `-dev` flag.
-- Generate self-signed cert in `%PROGRAMDATA%\skfilter\tls\` on first start; serve HTTPS on `127.0.0.1:8765`.
+- Serve plain HTTP on `127.0.0.1:8764` (loopback-only — connection never leaves the machine, no cert ceremony).
 - SQLite store + schema migrations.
 - `/setup` flow when `password_hash IS NULL`, then `/login`, then `/` with an empty rules table.
-- **Verify**: `go run . -dev`, browser to `https://127.0.0.1:8765`, set password, log in, see "no rules yet."
+- **Verify**: `go run . -dev`, browser to `http://localhost:8764`, set password, log in, see "no rules yet."
 
 ### Phase 2 — netsh wrapper + manual rule add via dashboard
 - `internal/firewall/netsh.go` — argv-style `exec.Command("netsh", "advfirewall", ...)` (never string-built; passes each token separately to avoid injection).
@@ -166,10 +166,10 @@ Build and test each phase end-to-end before the next.
 
 ### Phase 5 — Redirect-on-block: browser extension + /blocked page
 - `extension/manifest.json` — Manifest V3, `host_permissions: ["<all_urls>"]`, `permissions: ["webNavigation","declarativeNetRequest"]`.
-- `extension/background.js` — listens to `chrome.webNavigation.onBeforeNavigate` (main frame only). For each, `fetch("https://127.0.0.1:8765/api/check?domain="+host)`. If `{ allowed: false }`, calls `chrome.tabs.update(tabId, { url: "https://127.0.0.1:8765/blocked?url="+encodeURIComponent(originalUrl) })`.
+- `extension/background.js` — listens to `chrome.webNavigation.onBeforeNavigate` (main frame only). For each, `fetch("http://localhost:8764/api/check?domain="+host)`. If `{ allowed: false }`, calls `chrome.tabs.update(tabId, { url: "http://localhost:8764/blocked?url="+encodeURIComponent(originalUrl) })`.
 - Service exposes `/api/check?domain=...` — UN-authenticated but rate-limited (10 req/s/IP, loopback-only). Returns `{ allowed: bool, rule_id: int }`. Strict input validation (must be a valid hostname).
 - `/blocked` template — shows the requested URL, "Add to allowlist" button. Posts to `/api/rules` if user has an active session, else shows inline password prompt.
-- **Verify**: load extension into Chrome (Developer Mode → Load unpacked → `extension/`). Try to visit `https://reddit.com` (assuming not allowed) → tab redirects to `https://127.0.0.1:8765/blocked?url=https%3A%2F%2Freddit.com%2F`. Click "Add to allowlist," enter password, retry → reddit loads.
+- **Verify**: load extension into Chrome (Developer Mode → Load unpacked → `extension/`). Try to visit `https://reddit.com` (assuming not allowed) → tab redirects to `http://localhost:8764/blocked?url=https%3A%2F%2Freddit.com%2F`. Click "Add to allowlist," enter password, retry → reddit loads.
 
 ### Phase 6 — Audit log + light bypass-resistance
 - `audit_log(id, ts, actor_session_id, action, payload_json)` written from middleware on every state-changing API call and every `/login` (success/fail).
@@ -275,6 +275,15 @@ The only ways to *durably* change state are:
 | **(c) Skip force-install — manual unpacked load** | Nothing | The user drags `extension/` into `chrome://extensions` Developer Mode once per browser. Survives until the user manually removes it. No policy lock. |
 
 **Decision pending user input**: which path to take. Options (a) and (b) both let us write `ExtensionInstallForcelist` with the public update URL, which then *does* enable the rest of the lockdown matrix below. Option (c) means the lockdown matrix becomes "if the extension happens to be loaded, lock down everything else" — still useful, less complete.
+
+**Update (2026-05-10)**: the GitHub repo is now auto-deploying to **https://skfilter.pages.dev/** via Cloudflare Pages. That's the public HTTPS endpoint option (b) needs. Concrete next steps for force-install on this path:
+
+1. Generate a stable RSA-2048 keypair (committed only as the public key inside `manifest.json` derivation; private key kept in a GitHub Actions secret).
+2. Add a GitHub Action that, on each push to `main`, packs `extension/` into a signed `.crx` and writes `update.xml` pointing at it.
+3. Pages serves both files at `https://skfilter.pages.dev/skfilter.crx` and `https://skfilter.pages.dev/update.xml`.
+4. Installer writes `ExtensionInstallForcelist\1 = "<ext-id>;https://skfilter.pages.dev/update.xml"` for Chrome and Edge.
+
+This is a self-contained ~half-day of work. The extension ID is deterministic from the public key, so we can hardcode it in the installer once we generate the key. **Not yet implemented** — file under "next pickup."
 
 The original plan called this "Phase 7e — moderate ~150 lines." Reality: ~50 lines of registry writes (trivial) + however much work option (a) or (b) entails, which is mostly account / hosting setup, not code.
 
@@ -411,9 +420,9 @@ For users who want stricter: demote your daily account to Standard, set a long a
 
 1. `go build -o skfilter.exe`.
 2. Admin PowerShell → `.\skfilter.exe -install` → reboot.
-3. Browser → `https://127.0.0.1:8765` → set password → log in → empty rules list.
+3. Browser → `http://localhost:8764` → set password → log in → empty rules list.
 4. Drag `extension/` into `chrome://extensions` (Developer Mode on).
-5. Try `https://example.com` → tab redirects to `https://127.0.0.1:8765/blocked?url=...`.
+5. Try `https://example.com` → tab redirects to `http://localhost:8764/blocked?url=...`.
 6. Click "Add to allowlist" → confirm password if needed → wait for the row's IPs to populate.
 7. Retry `https://example.com` → loads normally.
 8. `/audit` page should show: login success, rule_added, ips_refreshed.

@@ -4,19 +4,10 @@ package cmd
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
-	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -32,7 +23,11 @@ import (
 
 const (
 	serviceName = "skfilter"
-	listenAddr  = "127.0.0.1:8765"
+	// Plain HTTP on loopback only. No cert warnings, no TLS handshake noise,
+	// connection never leaves the machine. Cookies are HttpOnly + SameSite=Lax
+	// and the session is HMAC-signed; loopback HTTP is the right trade-off
+	// for a local dashboard.
+	listenAddr = "127.0.0.1:8764"
 )
 
 // RunService is the entry point in service mode (called when SCM starts the
@@ -52,7 +47,7 @@ func (s *skfilterService) Execute(_ []string, r <-chan svc.ChangeRequest, status
 	defer cancel()
 
 	loopErr := make(chan error, 1)
-	go func() { loopErr <- runMainLoop(ctx) }()
+	go func() { loopErr <- runMainLoop(ctx, runMode{enforceDefaultDeny: true}) }()
 
 	status <- svc.Status{State: svc.Running, Accepts: accepted}
 
@@ -93,10 +88,19 @@ func (s *skfilterService) Execute(_ []string, r <-chan svc.ChangeRequest, status
 	}
 }
 
+// runMode flags differences between -dev (foreground, no admin) and the
+// installed Windows service (LocalSystem, expected to enforce policy).
+type runMode struct {
+	// enforceDefaultDeny — when true the reconciler re-applies the
+	// blockoutbound default policy on every tick if it drifts. False in
+	// dev mode so dashboard testing works without elevation.
+	enforceDefaultDeny bool
+}
+
 // runMainLoop is the shared body of the service. It builds every runtime
 // dependency, starts background workers (resolver + reconciler), serves HTTPS
 // at 127.0.0.1:8765, and blocks until ctx is canceled.
-func runMainLoop(ctx context.Context) error {
+func runMainLoop(ctx context.Context, mode runMode) error {
 	if err := config.EnsureDirs(); err != nil {
 		return fmt.Errorf("ensure dirs: %w", err)
 	}
@@ -106,10 +110,6 @@ func runMainLoop(ctx context.Context) error {
 		return fmt.Errorf("open db: %w", err)
 	}
 	defer store.Close()
-
-	if err := ensureCert(); err != nil {
-		return fmt.Errorf("ensure tls cert: %w", err)
-	}
 
 	signingKey, err := store.Settings.EnsureSigningKey()
 	if err != nil {
@@ -125,7 +125,9 @@ func runMainLoop(ctx context.Context) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		firewall.NewReconciler(store, fw).Run(ctx)
+		firewall.NewReconciler(store, fw, firewall.ReconcilerOptions{
+			EnforceDefaultDeny: mode.enforceDefaultDeny,
+		}).Run(ctx)
 	}()
 	go func() {
 		defer wg.Done()
@@ -139,17 +141,9 @@ func runMainLoop(ctx context.Context) error {
 		Resolver: rsv,
 	})
 
-	cert, err := tls.LoadX509KeyPair(config.TLSCertPath(), config.TLSKeyPath())
-	if err != nil {
-		return fmt.Errorf("load tls keypair: %w", err)
-	}
 	server := &http.Server{
-		Addr:    listenAddr,
-		Handler: handler,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		},
+		Addr:              listenAddr,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -158,8 +152,8 @@ func runMainLoop(ctx context.Context) error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("dashboard listening", "addr", "https://"+listenAddr)
-		err := server.ListenAndServeTLS("", "")
+		slog.Info("dashboard listening", "addr", "http://"+listenAddr)
+		err := server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
@@ -183,55 +177,3 @@ func runMainLoop(ctx context.Context) error {
 	return nil
 }
 
-// ensureCert generates a self-signed 4096-bit RSA cert (CN=127.0.0.1, IP SAN
-// 127.0.0.1, valid 10 years) at config.TLSCertPath / TLSKeyPath if either is
-// missing.
-func ensureCert() error {
-	certPath := config.TLSCertPath()
-	keyPath := config.TLSKeyPath()
-	if fileExists(certPath) && fileExists(keyPath) {
-		return nil
-	}
-
-	priv, err := rsa.GenerateKey(rand.Reader, 4096)
-	if err != nil {
-		return fmt.Errorf("gen rsa key: %w", err)
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return fmt.Errorf("serial: %w", err)
-	}
-	now := time.Now()
-	tmpl := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "127.0.0.1", Organization: []string{"skfilter"}},
-		NotBefore:    now.Add(-1 * time.Hour),
-		NotAfter:     now.AddDate(10, 0, 0),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		DNSNames:     []string{"localhost"},
-		IsCA:         true,
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
-	if err != nil {
-		return fmt.Errorf("create cert: %w", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-
-	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
-		return fmt.Errorf("write cert: %w", err)
-	}
-	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
-		return fmt.Errorf("write key: %w", err)
-	}
-	return nil
-}
-
-func fileExists(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && !st.IsDir()
-}
