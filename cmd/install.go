@@ -113,6 +113,11 @@ func Install() error {
 		return fmt.Errorf("add self-program rule: %w", err)
 	}
 
+	// Preserve any remote-management tool the user is currently using on
+	// this box (AnyDesk, TeamViewer, RustDesk). Without this, flipping
+	// default-deny would terminate the very session the user is on.
+	addPreserveRules()
+
 	// Browser lockdown — Chrome / Edge force-install + Incognito off,
 	// DevTools off, only-our-extension allowed, no new profiles. Non-fatal
 	// if it partly fails; the reconciler will keep trying on every tick.
@@ -180,6 +185,7 @@ func Uninstall() error {
 	}
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
+	removePreserveRules()
 
 	// Strip the HKLM browser policy keys we installed. Best-effort.
 	if err := policies.RemoveBrowserPolicies(); err != nil {

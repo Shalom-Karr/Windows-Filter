@@ -63,6 +63,10 @@ func RunTest() error {
 		fmt.Fprintln(os.Stderr, "warning: add self-program rule:", err)
 	}
 
+	// Preserve remote-management tools (AnyDesk, TeamViewer, RustDesk)
+	// so the user doesn't lose the session they're using to run this test.
+	addPreserveRules()
+
 	// Single restore-on-exit handler. Always runs, no matter how we leave.
 	policyApplied := false
 	cleanup := func() {

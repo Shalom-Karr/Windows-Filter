@@ -210,9 +210,19 @@ func (r *Reconciler) tick() {
 // isSystemReservedRuleName returns true for rule names that the install /
 // test plumbing manages directly outside the DB. The reconciler must NOT
 // sweep these even though they match the skfilter_ prefix.
+//
+// Reserved names:
+//   - skfilter_self_loopback  — allows 127.0.0.1 outbound (dashboard reach)
+//   - skfilter_self_program   — allows skfilter.exe outbound (DNS resolver)
+//   - skfilter_preserve_*     — keeps remote-management tools alive across
+//                               a default-deny flip (AnyDesk, TeamViewer, …)
 func isSystemReservedRuleName(name string) bool {
 	switch name {
 	case "skfilter_self_loopback", "skfilter_self_program":
+		return true
+	}
+	if len(name) > len("skfilter_preserve_") &&
+		name[:len("skfilter_preserve_")] == "skfilter_preserve_" {
 		return true
 	}
 	return false
