@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	serviceDisplay = "Skfilter (allowlist firewall)"
-	loopbackRule   = "skfilter_self_loopback"
+	serviceDisplay  = "Skfilter (allowlist firewall)"
+	loopbackRule    = "skfilter_self_loopback"
+	selfProgramRule = "skfilter_self_program"
 )
 
 // Install registers the service, sets failure recovery, applies default-deny
@@ -93,6 +94,23 @@ func Install() error {
 		return fmt.Errorf("add loopback rule: %w", err)
 	}
 
+	// skfilter.exe itself needs outbound for DNS resolution (so it can
+	// resolve the domains the user adds to the allowlist). Without this
+	// rule, default-deny blocks the resolver's net.LookupIP calls and
+	// rules sit with empty IPs forever.
+	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
+	if err := runNetsh(
+		"advfirewall", "firewall", "add", "rule",
+		"name="+selfProgramRule,
+		"dir=out",
+		"action=allow",
+		"program="+exePath,
+		"enable=yes",
+		"profile=any",
+	); err != nil {
+		return fmt.Errorf("add self-program rule: %w", err)
+	}
+
 	// Browser lockdown — Chrome / Edge force-install + Incognito off,
 	// DevTools off, only-our-extension allowed, no new profiles. Non-fatal
 	// if it partly fails; the reconciler will keep trying on every tick.
@@ -153,10 +171,13 @@ func Uninstall() error {
 		_ = s.Close()
 	}
 
-	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "notconfigured,allowoutbound"); err != nil {
+	// "blockinbound,allowoutbound" is the Windows factory default for the
+	// local store. "notconfigured" is GPO-only.
+	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,allowoutbound"); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: restore default policy:", err)
 	}
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
+	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
 
 	// Strip the HKLM browser policy keys we installed. Best-effort.
 	if err := policies.RemoveBrowserPolicies(); err != nil {

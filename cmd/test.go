@@ -51,6 +51,19 @@ func RunTest() error {
 		fmt.Fprintln(os.Stderr, "warning: add loopback rule:", err)
 	}
 
+	// Allow skfilter.exe itself outbound so the resolver can do DNS lookups.
+	// Without this, default-deny blocks net.LookupIP, rules get added with
+	// empty IPs, and curl <allowed-domain> times out forever.
+	exePath, _ := os.Executable()
+	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
+	if err := runNetsh(
+		"advfirewall", "firewall", "add", "rule",
+		"name="+selfProgramRule, "dir=out", "action=allow",
+		"program="+exePath, "enable=yes", "profile=any",
+	); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: add self-program rule:", err)
+	}
+
 	// Always restore on exit, no matter how we leave.
 	cleanup := func() {
 		fmt.Println()
@@ -63,6 +76,7 @@ func RunTest() error {
 			fmt.Println("Restored.")
 		}
 		_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
+		_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
 	}
 	defer cleanup()
 
@@ -84,21 +98,21 @@ func RunTest() error {
 	return nil
 }
 
-// readPolicyState returns the current default-outbound policy in the format
-// `netsh advfirewall set allprofiles firewallpolicy <THIS>` accepts. We just
-// read what's there now and write it back unchanged on exit.
+// readPolicyState returns the policy string we'll restore on exit.
+//
+// netsh advfirewall accepts these values for the local store:
+//   blockinboundalways,blockoutbound
+//   blockinbound,blockoutbound
+//   blockinbound,allowoutbound        ← Windows factory default
+// "notconfigured" only works when configuring a Group Policy object (GPO),
+// not the local store. The earlier hardcoded "notconfigured,allowoutbound"
+// failed at exit with: "Notconfigured value can only be used when configuring
+// a Group Policy object (GPO) store."
+//
+// We don't read the previous policy back (netsh has no clean machine-readable
+// way to do that for the firewallpolicy verb) — we always restore to the
+// factory default, which is the right thing to do for a self-disarming
+// -test session.
 func readPolicyState() (string, error) {
-	// netsh doesn't have a simple way to print the literal "X,Y" two-policy
-	// string back. It's effectively always one of:
-	//   blockinboundalways,blockoutbound
-	//   blockinbound,blockoutbound
-	//   blockinbound,allowoutbound
-	//   notconfigured,allowoutbound        ← Windows default
-	//   notconfigured,notconfigured
-	//
-	// For -test we don't actually care which one was set previously — we
-	// just want a sane "go back to default" string. Use the canonical
-	// Windows default. If a power user had a custom policy, they can
-	// redo it manually.
-	return "notconfigured,allowoutbound", nil
+	return "blockinbound,allowoutbound", nil
 }

@@ -122,9 +122,16 @@ func (r *Reconciler) tick() {
 		})
 	}
 
-	// Sweep rogue / orphaned skfilter_* rules.
+	// Sweep rogue / orphaned skfilter_* rules. Two categories of name are
+	// owned by the system, NOT by the DB, and must not be swept:
+	//   skfilter_self_loopback — added by Install/test to allow 127.0.0.1
+	//   skfilter_self_program  — added by Install/test to let skfilter.exe
+	//                            do DNS lookups under default-deny
 	for name := range actualByName {
 		if _, ok := desiredByName[name]; ok {
+			continue
+		}
+		if isSystemReservedRuleName(name) {
 			continue
 		}
 		if err := r.fw.DeleteRule(name); err != nil {
@@ -178,6 +185,17 @@ func (r *Reconciler) tick() {
 			r.lastPolicyErr = err.Error()
 		}
 	}
+}
+
+// isSystemReservedRuleName returns true for rule names that the install /
+// test plumbing manages directly outside the DB. The reconciler must NOT
+// sweep these even though they match the skfilter_ prefix.
+func isSystemReservedRuleName(name string) bool {
+	switch name {
+	case "skfilter_self_loopback", "skfilter_self_program":
+		return true
+	}
+	return false
 }
 
 func sortedCopy(in []string) []string {
