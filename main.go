@@ -2,8 +2,12 @@
 //
 // Run modes:
 //
-//	skfilter.exe              service mode (only valid when launched by SCM)
-//	skfilter.exe -dev         foreground for development (Ctrl-C to stop)
+//	skfilter.exe              "just make it work":
+//	                            • SCM-launched  → service mode
+//	                            • Admin user    → install (if needed) + start service
+//	                            • Non-admin     → print elevate-and-rerun message, exit
+//	skfilter.exe -dev         foreground for development (Ctrl-C to stop, no admin needed)
+//	skfilter.exe -test        flip default-deny + run dashboard for 5 min, then auto-revert (admin)
 //	skfilter.exe -install     register as a Windows service and lock the firewall
 //	skfilter.exe -uninstall   prompts for the dashboard password, then removes
 package main
@@ -21,6 +25,7 @@ func main() {
 	install := flag.Bool("install", false, "install as Windows service")
 	uninstall := flag.Bool("uninstall", false, "uninstall the service (prompts for password)")
 	dev := flag.Bool("dev", false, "run in foreground (development mode)")
+	test := flag.Bool("test", false, "5-minute self-disarming default-deny run (admin required)")
 	flag.Parse()
 
 	switch {
@@ -36,7 +41,12 @@ func main() {
 		if err := cmd.RunDev(); err != nil {
 			fail(err)
 		}
+	case *test:
+		if err := cmd.RunTest(); err != nil {
+			fail(err)
+		}
 	default:
+		// Are we being launched by the Service Control Manager?
 		isService, err := svc.IsWindowsService()
 		if err != nil {
 			fail(err)
@@ -47,11 +57,23 @@ func main() {
 			}
 			return
 		}
-		fmt.Println("skfilter usage:")
-		fmt.Println("  -install     install as Windows service")
-		fmt.Println("  -uninstall   uninstall the service (prompts for password)")
-		fmt.Println("  -dev         run in foreground (development mode)")
-		os.Exit(1)
+
+		// Interactive launch (double-click, command line). The default for the
+		// admin case is "auto-install + start"; for non-admin it's "tell the
+		// user how to elevate."
+		if !cmd.IsAdmin() {
+			fmt.Println("skfilter needs Administrator privileges to manage Windows Firewall.")
+			fmt.Println()
+			fmt.Println("  Right-click skfilter.exe → Run as administrator")
+			fmt.Println()
+			fmt.Println("Or, for dashboard-only testing (no firewall changes):")
+			fmt.Println("  skfilter.exe -dev")
+			os.Exit(1)
+		}
+		// Admin path: ensure installed + running, then exit.
+		if err := cmd.EnsureInstalledAndRunning(); err != nil {
+			fail(err)
+		}
 	}
 }
 
