@@ -121,8 +121,15 @@ func (n *NetshFirewall) ListSkfilterRules() ([]Rule, error) {
 }
 
 // GetDefaultOutbound returns "block" or "allow".
+//
+// IMPORTANT: this calls "show allprofiles" (no trailing "state"). The "state"
+// subverb only emits the ON/OFF column; the "Firewall Policy" line we parse
+// for the BlockInbound,BlockOutbound tuple is only printed by the full
+// "show allprofiles" form. Earlier versions used "state" and the parser
+// always returned "allow" — reconciler then re-applied default-deny every
+// tick and audit-logged policy_drift_recovered on a 5-second loop.
 func (n *NetshFirewall) GetDefaultOutbound() (string, error) {
-	out, err := n.run("advfirewall", "show", "allprofiles", "state")
+	out, err := n.run("advfirewall", "show", "allprofiles")
 	if err != nil {
 		return "", fmt.Errorf("firewall.GetDefaultOutbound: %w", err)
 	}

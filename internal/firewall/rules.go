@@ -124,8 +124,21 @@ func splitRuleLine(line string) (string, string, bool) {
 	return key, val, true
 }
 
-// parseRemoteIPField parses values like "1.2.3.4/32,5.6.7.8/32" or "Any",
-// stripping CIDR suffix and dropping "Any" (which means "no scoping").
+// parseRemoteIPField parses values like:
+//
+//	"1.2.3.4/32,5.6.7.8/32"
+//	"2001:db8::1-2001:db8::1"               (single IPv6 rendered as range)
+//	"2001:db8::1-2001:db8::8"               (genuine range)
+//	"Any"
+//
+// Behavior:
+//   - "Any" → nil (means "no remoteip scoping" — netsh sometimes prints this)
+//   - "/N"  → strip the CIDR suffix
+//   - "X-X" → normalize to just "X" (netsh stores single IPv6 addresses as
+//     degenerate ranges; without this normalization the reconciler sees a
+//     mismatch between desired "X" and actual "X-X" and loops forever
+//     trying to "repair" rules that are already correct)
+//   - "X-Y" → keep as-is (genuine multi-address range)
 func parseRemoteIPField(v string) []string {
 	if v == "" || strings.EqualFold(v, "Any") {
 		return nil
@@ -139,6 +152,13 @@ func parseRemoteIPField(v string) []string {
 		}
 		if i := strings.Index(p, "/"); i >= 0 {
 			p = p[:i]
+		}
+		if i := strings.Index(p, "-"); i >= 0 {
+			start := strings.TrimSpace(p[:i])
+			end := strings.TrimSpace(p[i+1:])
+			if start == end && start != "" {
+				p = start
+			}
 		}
 		out = append(out, p)
 	}
