@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skfilter — First-run setup</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+    <h1>skfilter</h1>
+</header>
+<main class="container">
+    <div class="card center-card">
+        <h2>Create dashboard password</h2>
+        <p class="muted">Choose a password for the local dashboard. This password is the only thing protecting your allowlist — pick something hard to type from muscle memory.</p>
+        <div id="banner" class="banner hidden"></div>
+        <form id="setup-form">
+            <div class="field">
+                <label for="password">Password (min 8 chars)</label>
+                <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8" autofocus>
+            </div>
+            <div class="field">
+                <label for="confirm">Confirm password</label>
+                <input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="8">
+            </div>
+            <button type="submit" style="width:100%">Create password</button>
+        </form>
+    </div>
+</main>
+<script>
+const banner = document.getElementById('banner');
+function err(msg) { banner.textContent = msg; banner.classList.remove('hidden'); }
+document.getElementById('setup-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pw = document.getElementById('password').value;
+    const cf = document.getElementById('confirm').value;
+    if (pw !== cf) { err('Passwords do not match'); return; }
+    if (pw.length < 8) { err('Password must be at least 8 characters'); return; }
+    const res = await fetch('/setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: pw})
+    });
+    if (res.ok) {
+        window.location = '/';
+    } else {
+        let msg = 'Setup failed';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        err(msg);
+    }
+});
+</script>
+</body>
+</html>

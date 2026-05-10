@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skfilter — Allowlist</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+    <h1>skfilter</h1>
+    <a href="/">Allowlist</a>
+    <a href="/audit">Audit</a>
+    <span class="spacer"></span>
+    <form action="/logout" method="POST" style="margin:0">
+        <button class="btn-secondary btn-sm" type="submit">Logout</button>
+    </form>
+</header>
+
+<main class="container">
+    <div id="banner" class="banner hidden"></div>
+
+    <div class="card">
+        <h2>Add domain</h2>
+        <div class="add-row">
+            <div style="flex:1; min-width:240px;">
+                <label for="add-domain">Domain (e.g. example.com)</label>
+                <input id="add-domain" type="text" autocomplete="off" placeholder="example.com">
+            </div>
+            <button id="add-btn">Add to allowlist</button>
+        </div>
+        <p class="muted" style="margin-top:10px">The service resolves the domain to IPs and adds a Windows Firewall allow rule. Re-resolution runs every 15 minutes.</p>
+    </div>
+
+    <div class="card">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+            <h2 style="margin:0; flex:1">Allowed sites</h2>
+            <input id="filter" type="search" placeholder="Filter..." style="max-width:200px">
+            <button id="reload-btn" class="btn-secondary btn-sm">Reload</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Domain</th>
+                    <th>IPs</th>
+                    <th>Last resolved</th>
+                    <th>Status</th>
+                    <th style="text-align:right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="rules-body">
+                <tr><td colspan="5" class="muted" style="text-align:center; padding:24px">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

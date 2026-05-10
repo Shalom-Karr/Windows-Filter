@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skfilter — Audit log</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+    <h1>skfilter</h1>
+    <a href="/">Allowlist</a>
+    <a href="/audit">Audit</a>
+    <span class="spacer"></span>
+    <form action="/logout" method="POST" style="margin:0">
+        <button class="btn-secondary btn-sm" type="submit">Logout</button>
+    </form>
+</header>
+<main class="container">
+    <div id="banner" class="banner hidden"></div>
+    <div class="card">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+            <h2 style="margin:0; flex:1">Audit log</h2>
+            <button id="reload-btn" class="btn-secondary btn-sm">Reload</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:170px">Timestamp</th>
+                    <th style="width:160px">Actor</th>
+                    <th style="width:180px">Action</th>
+                    <th>Payload</th>
+                </tr>
+            </thead>
+            <tbody id="audit-body">
+                <tr><td colspan="4" class="muted" style="text-align:center; padding:24px">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</main>
+<script>
+const banner = document.getElementById('banner');
+function showError(msg) { banner.textContent = msg; banner.classList.remove('hidden'); }
+function clearError() { banner.classList.add('hidden'); }
+
+function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+}
+
+function renderPayload(p) {
+    if (p === null || p === undefined || p === '') return '<span class="muted">(none)</span>';
+    if (typeof p === 'string') {
+        try { p = JSON.parse(p); } catch (_) { return escapeHTML(p); }
+    }
+    return '<div class="payload">' + escapeHTML(JSON.stringify(p, null, 2)) + '</div>';
+}
+
+async function loadAudit() {
+    clearError();
+    try {
+        const res = await fetch('/api/audit?limit=200');
+        if (!res.ok) {
+            if (res.status === 401) { window.location = '/login'; return; }
+            throw new Error('HTTP ' + res.status);
+        }
+        const rows = await res.json();
+        const tbody = document.getElementById('audit-body');
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center; padding:24px">No entries yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map(r => {
+            const ts = r.ts ? new Date(r.ts).toLocaleString() : '';
+            const actor = r.actor ? escapeHTML(r.actor) : '<span class="muted">anonymous</span>';
+            return `<tr>
+                <td class="muted">${escapeHTML(ts)}</td>
+                <td>${actor}</td>
+                <td><span class="badge">${escapeHTML(r.action || '')}</span></td>
+                <td>${renderPayload(r.payload)}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        showError('Failed to load audit log: ' + e.message);
+    }
+}
+
+document.getElementById('reload-btn').addEventListener('click', loadAudit);
+loadAudit();
+</script>
+</body>
+</html>

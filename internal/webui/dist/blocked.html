@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blocked — skfilter</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+    <h1>skfilter</h1>
+    <span class="spacer"></span>
+    {{if .Authenticated}}<a href="/">Dashboard</a>{{end}}
+</header>
+<main class="container">
+    <div class="card center-card">
+        <div class="blocked-hero">
+            <div class="muted" style="font-size:13px; margin-bottom:8px">This site is not on your allowlist</div>
+            <div class="domain">{{.Domain}}</div>
+            <div class="url">{{.URL}}</div>
+        </div>
+
+        <div id="banner" class="banner hidden"></div>
+        <div id="success" class="banner banner-info hidden"></div>
+
+        {{if .Authenticated}}
+        <button id="add-btn" style="width:100%">Add to allowlist</button>
+        <p class="muted" style="margin-top:10px; text-align:center">Click to add this domain. It will resolve and a firewall rule will be created.</p>
+        {{else}}
+        <form id="auth-add-form">
+            <div class="field">
+                <label for="password">Dashboard password</label>
+                <input id="password" type="password" autocomplete="current-password" required autofocus>
+            </div>
+            <button type="submit" style="width:100%">Sign in &amp; add to allowlist</button>
+        </form>
+        {{end}}
+    </div>
+</main>
+<script>
+const DOMAIN = {{.DomainJSON}};
+const URL_STR = {{.URLJSON}};
+const banner = document.getElementById('banner');
+const success = document.getElementById('success');
+
+function showError(msg) {
+    banner.textContent = msg;
+    banner.classList.remove('hidden');
+    success.classList.add('hidden');
+}
+function showSuccess(msg) {
+    success.textContent = msg;
+    success.classList.remove('hidden');
+    banner.classList.add('hidden');
+}
+
+async function addDomain() {
+    const res = await fetch('/api/rules', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({domain: DOMAIN})
+    });
+    if (res.ok) {
+        showSuccess('Added. You can now retry the original URL.');
+        const btn = document.getElementById('add-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Added'; }
+        setTimeout(() => { window.location = URL_STR; }, 1500);
+        return true;
+    }
+    let msg = 'Failed to add';
+    try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+    showError(msg);
+    return false;
+}
+
+const addBtn = document.getElementById('add-btn');
+if (addBtn) addBtn.addEventListener('click', addDomain);
+
+const authForm = document.getElementById('auth-add-form');
+if (authForm) {
+    authForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pw = document.getElementById('password').value;
+        const res = await fetch('/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({password: pw})
+        });
+        if (!res.ok) { showError('Invalid password'); return; }
+        await addDomain();
+    });
+}
+</script>
+</body>
+</html>

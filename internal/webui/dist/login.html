@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skfilter — Login</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+    <h1>skfilter</h1>
+</header>
+<main class="container">
+    <div class="card center-card">
+        <h2>Sign in</h2>
+        {{if .Error}}<div class="banner">{{.Error}}</div>{{end}}
+        <form method="POST" action="/login" id="login-form">
+            <div class="field">
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+            </div>
+            {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
+            <button type="submit" style="width:100%">Sign in</button>
+        </form>
+    </div>
+</main>
+<script>
+// Forms posting to JSON endpoints — convert form data to JSON so the API works for both
+// browser form posts (no JS) and JS-driven flows.
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const next = fd.get('next') || '/';
+    const res = await fetch('/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: fd.get('password')})
+    });
+    if (res.ok) {
+        window.location = next;
+    } else {
+        let msg = 'Invalid password';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        let banner = document.querySelector('.banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.className = 'banner';
+            e.target.parentNode.insertBefore(banner, e.target);
+        }
+        banner.textContent = msg;
+    }
+});
+</script>
+</body>
+</html>
