@@ -15,7 +15,12 @@ import (
 	"github.com/Shalom-Karr/skfilter/internal/firewall"
 )
 
-const tickInterval = 15 * time.Minute
+// Re-resolve every minute. Many CDN-fronted hosts (github.com, anything
+// Cloudflare / AWS-fronted) rotate A records faster than every 15 min and
+// the previous 15-minute cadence meant new connections hit unallocated
+// IPs and got firewalled. 1 min is the floor that doesn't hammer DNS for
+// the dozen-rule scale we're targeting.
+const tickInterval = 1 * time.Minute
 
 // Resolver drives the periodic DNS-refresh loop.
 type Resolver struct {
