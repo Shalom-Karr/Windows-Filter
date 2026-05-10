@@ -74,11 +74,12 @@ func Install() error {
 		fmt.Fprintln(os.Stderr, "warning: SetRecoveryActions:", err)
 	}
 
-	// Default-deny outbound. "blockinbound" (not "blockinboundalways") so
-	// inbound allow rules (RDP, SSH, etc.) still work on a VPS.
-	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"); err != nil {
-		return fmt.Errorf("apply default-deny: %w", err)
-	}
+	// NOTE: default-deny is NOT applied here. The service's reconciler
+	// gates enforcement on IsPasswordSet() and stays in stand-down until
+	// the user completes /setup. This prevents the box from sitting in
+	// "default-deny with no UI to manage rules" right after install. Once
+	// the password is saved, the reconciler's next tick (≤ 5s later)
+	// applies blockinbound,blockoutbound automatically.
 
 	// Loopback allow so the service can talk to itself / dashboard reaches the listener.
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)

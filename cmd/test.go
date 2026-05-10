@@ -1,10 +1,19 @@
 // -test mode: a self-disarming dev run.
 //
-// Flips default-deny on, runs the dashboard with the reconciler enforcing,
-// and auto-reverts after 5 minutes (or on Ctrl-C, whichever comes first). The
-// goal is "I want to feel what default-deny does without committing to a
-// service install" — turn it on for a few minutes, see the firewall actually
-// dropping traffic, then it cleans itself up.
+// Flow:
+//
+//   1. Add the loopback + self-program rules (harmless allow rules — these
+//      don't activate filtering on their own).
+//   2. Start the dashboard. NO firewall enforcement yet.
+//   3. Wait for the user to set a password on /setup (poll the DB).
+//   4. Apply default-deny outbound (the reconciler also picks up the
+//      password-set state and starts enforcing rule sync).
+//   5. Start the 5-minute auto-revert timer from THIS moment.
+//   6. On timer expiry / Ctrl-C: revert firewall, delete helper rules, exit.
+//
+// The pre-password gate means the box never sits in a "default-deny with
+// no UI to manage rules" state — the user always has a working dashboard
+// path before traffic is actually blocked.
 package cmd
 
 import (
@@ -30,35 +39,20 @@ func RunTest() error {
 		return fmt.Errorf("-test requires Administrator (it sets the default firewall policy)")
 	}
 
-	// Capture and remember whatever the previous default policy was, so we
-	// can put it back exactly when we exit.
-	prev, err := readPolicyState()
-	if err != nil {
-		return fmt.Errorf("read current policy: %w", err)
-	}
-	fmt.Printf("Saving current default-outbound policy: %s\n", prev)
-
-	// Apply default-deny. Use "blockinbound" (not "blockinboundalways") so
-	// inbound services still work (RDP / SSH on a VPS); we only care about
-	// gating OUTBOUND.
-	fmt.Println("Applying default-deny outbound for the next 5 minutes...")
-	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"); err != nil {
-		return fmt.Errorf("apply default-deny: %w", err)
-	}
-	// Loopback allow so the dashboard works.
+	// Loopback allow so the dashboard is reachable even once default-deny
+	// is on later. Harmless in default-allow mode (it's just an allow rule
+	// that's redundant with the default).
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
 	if err := runNetsh(
 		"advfirewall", "firewall", "add", "rule",
 		"name="+loopbackRule, "dir=out", "action=allow", "protocol=any",
 		"remoteip=127.0.0.1", "enable=yes", "profile=any",
 	); err != nil {
-		// Non-fatal but warn — without this the dashboard at 127.0.0.1:8764 may not be reachable.
 		fmt.Fprintln(os.Stderr, "warning: add loopback rule:", err)
 	}
 
-	// Allow skfilter.exe itself outbound so the resolver can do DNS lookups.
-	// Without this, default-deny blocks net.LookupIP, rules get added with
-	// empty IPs, and curl <allowed-domain> times out forever.
+	// Allow skfilter.exe itself outbound (DNS resolver, etc.). Same logic —
+	// harmless until default-deny is on.
 	exePath, _ := os.Executable()
 	_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
 	if err := runNetsh(
@@ -69,20 +63,19 @@ func RunTest() error {
 		fmt.Fprintln(os.Stderr, "warning: add self-program rule:", err)
 	}
 
-	// Enable Windows Firewall logging so the user can see every allow/drop
-	// decision in real time. Disabled on cleanup.
-	enableFirewallLogging()
-
-	// Always restore on exit, no matter how we leave.
+	// Single restore-on-exit handler. Always runs, no matter how we leave.
+	policyApplied := false
 	cleanup := func() {
 		fmt.Println()
-		fmt.Println("Reverting default firewall policy...")
-		if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", prev); err != nil {
-			fmt.Fprintln(os.Stderr, "warning: restore default policy:", err)
-			fmt.Fprintln(os.Stderr, "   manual recovery:")
-			fmt.Fprintln(os.Stderr, "     netsh advfirewall set allprofiles firewallpolicy notconfigured,allowoutbound")
-		} else {
-			fmt.Println("Restored.")
+		if policyApplied {
+			fmt.Println("Reverting default firewall policy...")
+			if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,allowoutbound"); err != nil {
+				fmt.Fprintln(os.Stderr, "warning: restore default policy:", err)
+				fmt.Fprintln(os.Stderr, "   manual recovery:")
+				fmt.Fprintln(os.Stderr, "     netsh advfirewall set allprofiles firewallpolicy blockinbound,allowoutbound")
+			} else {
+				fmt.Println("Restored.")
+			}
 		}
 		_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+loopbackRule)
 		_ = runNetsh("advfirewall", "firewall", "delete", "rule", "name="+selfProgramRule)
@@ -90,50 +83,82 @@ func RunTest() error {
 	}
 	defer cleanup()
 
-	// Run the same main loop as -dev / service mode, with the reconciler
-	// enforcing default-deny. Honors Ctrl-C and the 5-minute timeout.
+	// Signal-aware context that lives for the whole session.
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ctx, cancel := context.WithTimeout(parent, testDuration)
-	defer cancel()
-
-	fmt.Printf("Dashboard: http://localhost:8764\n")
-	fmt.Printf("Auto-revert at: %s\n", time.Now().Add(testDuration).Format(time.Kitchen))
-	fmt.Println("Press Ctrl-C to revert sooner.")
-
-	// Open a read-only Store handle for the firewall-log tailer's IP→domain
-	// lookups. Separate from the one runMainLoop opens — SQLite handles
-	// concurrent readers cleanly.
+	// Open a Store handle for the password-polling + log-tailer.
 	store, err := db.Open(config.DBPath())
-	if err == nil {
-		defer store.Close()
-		go tailFirewallLog(ctx, store)
-	} else {
-		fmt.Fprintln(os.Stderr, "warning: firewall-log tailer disabled (db open failed):", err)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer store.Close()
+
+	// Spawn the dashboard. EnforceDefaultDeny=true so the reconciler is
+	// ARMED — but its ShouldEnforce gate (wired in cmd/service.go) checks
+	// IsPasswordSet() per tick, so it stays in stand-down until the user
+	// completes /setup.
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runMainLoop(ctx, runMode{enforceDefaultDeny: true})
+	}()
+
+	fmt.Println()
+	fmt.Println("Dashboard:  http://localhost:8764")
+	fmt.Println()
+	fmt.Println("→ Open it and set a password on /setup.")
+	fmt.Println("  The firewall stays UNTOUCHED until you save a password.")
+	fmt.Println("  Once you do, default-deny activates and the 5-minute timer starts.")
+	fmt.Println()
+
+	// Block until the user completes /setup. Returns false on Ctrl-C.
+	if !waitForPasswordSet(parent, store) {
+		return nil
 	}
 
-	if err := runMainLoop(ctx, runMode{enforceDefaultDeny: true}); err != nil {
-		return fmt.Errorf("test loop: %w", err)
+	// Password set — apply default-deny + start the timer.
+	fmt.Println()
+	fmt.Println("Password set — applying default-deny outbound.")
+	if err := runNetsh("advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"); err != nil {
+		return fmt.Errorf("apply default-deny: %w", err)
+	}
+	policyApplied = true
+
+	enableFirewallLogging()
+	go tailFirewallLog(ctx, store)
+
+	fmt.Printf("Auto-revert at: %s\n", time.Now().Add(testDuration).Format(time.Kitchen))
+	fmt.Println("Press Ctrl-C to revert sooner.")
+	fmt.Println()
+
+	select {
+	case <-parent.Done():
+	case <-time.After(testDuration):
+	case err := <-runDone:
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "service loop exited:", err)
+		}
 	}
 	return nil
 }
 
-// readPolicyState returns the policy string we'll restore on exit.
-//
-// netsh advfirewall accepts these values for the local store:
-//   blockinboundalways,blockoutbound
-//   blockinbound,blockoutbound
-//   blockinbound,allowoutbound        ← Windows factory default
-// "notconfigured" only works when configuring a Group Policy object (GPO),
-// not the local store. The earlier hardcoded "notconfigured,allowoutbound"
-// failed at exit with: "Notconfigured value can only be used when configuring
-// a Group Policy object (GPO) store."
-//
-// We don't read the previous policy back (netsh has no clean machine-readable
-// way to do that for the firewallpolicy verb) — we always restore to the
-// factory default, which is the right thing to do for a self-disarming
-// -test session.
-func readPolicyState() (string, error) {
-	return "blockinbound,allowoutbound", nil
+// waitForPasswordSet polls the settings row every 500ms until the password
+// has been saved. Returns false if ctx was canceled (Ctrl-C) before the
+// password was set.
+func waitForPasswordSet(ctx context.Context, store *db.Store) bool {
+	t := time.NewTicker(500 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+			ok, err := store.Settings.IsPasswordSet()
+			if err == nil && ok {
+				return true
+			}
+		}
+	}
 }

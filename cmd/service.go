@@ -128,6 +128,14 @@ func runMainLoop(ctx context.Context, mode runMode) error {
 		defer wg.Done()
 		recOpts := firewall.ReconcilerOptions{
 			EnforceDefaultDeny: mode.enforceDefaultDeny,
+			// Gate enforcement on password being set. Until /setup
+			// completes, the reconciler stays in stand-down — firewall
+			// untouched. As soon as the user saves a password the next
+			// tick (≤ 5s later) flips on default-deny + rule sync.
+			ShouldEnforce: func() bool {
+				set, _ := store.Settings.IsPasswordSet()
+				return set
+			},
 		}
 		if mode.enforceDefaultDeny {
 			recOpts.PolicyRepairer = policies.WriteBrowserPolicies

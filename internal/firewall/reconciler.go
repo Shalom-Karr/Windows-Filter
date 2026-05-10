@@ -20,6 +20,7 @@ type Reconciler struct {
 	fw                 Firewall
 	interval           time.Duration
 	enforceDefaultDeny bool
+	shouldEnforceFn    func() bool
 	policyRepairer     func() error
 	lastPolicyErr      string // last non-nil err message, used to dedupe audit entries
 	policyHealthy      bool   // last known good/bad state, drives transition audits
@@ -31,18 +32,23 @@ type ReconcilerOptions struct {
 	// netsh-shell-out approach is ~5s; below that the box wastes CPU on
 	// netsh parsing without gaining real-time-ness.
 	Interval time.Duration
-	// EnforceDefaultDeny re-applies blockoutbound on every tick if the
-	// firewall's default policy has drifted. Requires admin. Set true in
-	// service mode (the installer set the policy at install time and the
-	// reconciler keeps it pinned). Set false in dev mode so dashboards can
-	// be tested without elevation.
+	// EnforceDefaultDeny is the mode flag. When false, the reconciler is in
+	// full stand-down — no firewall changes, no policy enforcement. Set
+	// false in dev mode. Set true in service / -test mode.
 	EnforceDefaultDeny bool
+
+	// ShouldEnforce is an optional per-tick gate. When non-nil and it
+	// returns false, the reconciler skips the entire tick (no rule sync,
+	// no policy enforcement, no policy-key repair) even if EnforceDefaultDeny
+	// is true. Used to keep the firewall untouched until the user completes
+	// the dashboard /setup flow (returns false until a password is set).
+	ShouldEnforce func() bool
 
 	// PolicyRepairer, when non-nil, is invoked on every tick (after the
 	// firewall reconciliation) to re-assert HKLM browser policy keys. The
 	// runtime wires this to cmd/internal-policies WriteBrowserPolicies so
 	// the firewall package itself stays free of registry / cmd imports.
-	// Only invoked when EnforceDefaultDeny is true (service mode).
+	// Only invoked when enforcement is active.
 	PolicyRepairer func() error
 }
 
@@ -57,6 +63,7 @@ func NewReconciler(store *db.Store, fw Firewall, opts ReconcilerOptions) *Reconc
 		fw:                 fw,
 		interval:           interval,
 		enforceDefaultDeny: opts.EnforceDefaultDeny,
+		shouldEnforceFn:    opts.ShouldEnforce,
 		policyRepairer:     opts.PolicyRepairer,
 		policyHealthy:      true, // optimistic; first failure flips it
 	}
@@ -79,6 +86,19 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) tick() {
+	// Mode-level gate: dev mode never enforces anything.
+	if !r.enforceDefaultDeny {
+		return
+	}
+	// Dynamic gate: stay in stand-down until the user completes /setup.
+	// Without this, default-deny would flip on the moment the service
+	// starts — but the user hasn't even logged in yet, so they have no
+	// way to manage the allowlist. Skip the entire tick (no rule sync,
+	// no policy enforcement, no policy-key repair).
+	if r.shouldEnforceFn != nil && !r.shouldEnforceFn() {
+		return
+	}
+
 	desired, err := r.store.Rules.AllEnabled()
 	if err != nil {
 		slog.Error("reconciler: list rules", "err", err)

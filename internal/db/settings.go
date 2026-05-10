@@ -30,6 +30,17 @@ func (s *SettingsRepo) GetPasswordHash() ([]byte, error) {
 	return hash, nil
 }
 
+// IsPasswordSet reports whether the dashboard password has been set. Used to
+// gate firewall enforcement: skfilter stays in stand-down mode until the
+// user completes the /setup flow.
+func (s *SettingsRepo) IsPasswordSet() (bool, error) {
+	hash, err := s.GetPasswordHash()
+	if err != nil {
+		return false, err
+	}
+	return len(hash) > 0, nil
+}
+
 // SetPasswordHash overwrites the stored bcrypt hash.
 func (s *SettingsRepo) SetPasswordHash(hash []byte) error {
 	if len(hash) == 0 {
