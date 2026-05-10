@@ -227,9 +227,13 @@ The base plan is "medium bypass resistance" — anything an Administrator can do
 
 The single most effective answer to "stop firewall edits that don't go through the UI" is a **state reconciler**: the service treats SQLite as the source of truth and continuously rewrites the firewall to match. Any out-of-band change — `netsh advfirewall firewall add rule …`, `netsh advfirewall reset`, deleting a rule from `wf.msc` — is wiped within the reconciler interval.
 
+**Tick interval — corrected (2026-05-10)**: original plan said "10s, drop to 2s once netsh parsing is fast." Reality check: `netsh advfirewall firewall show rule name=all` runs in 200–500 ms each call, plus parse. A 2s tick would mean we're spending ~25 % of one CPU continuously, with most of that wasted. **Realistic floor with netsh shelling is 5 s.** Sub-second drift correction would require switching from `netsh` shell-out to the **Windows Filtering Platform COM API** (`HNetCfg.FwPolicy2` via `golang.org/x/sys/windows/com`), which is a separate, larger project — out of scope for v1.
+
+Compromise: **default to 5 s**, expose as a config knob in the dashboard (10 s for casual use, 5 s for "actively trying to bypass" scenarios). Anything below 5 s on netsh is a non-starter without a different firewall API.
+
 Implementation:
 
-- New goroutine in `internal/firewall/reconciler.go`, ticks every 10 seconds.
+- New goroutine in `internal/firewall/reconciler.go`, ticks every **5 seconds** (configurable).
 - Each tick:
   1. `desiredRules = db.SelectEnabledRules()` → set of `{name, ips}` we want present.
   2. `actualRules = netsh.ListSkfilterRules()` → set of `skfilter_*` rules currently in Windows Firewall.
@@ -254,19 +258,31 @@ The only ways to *durably* change state are:
 2. Stop the service first. Phase 7b watchdog brings it back within 60s, Phase 7c ACL lockdown makes stopping require SYSTEM elevation.
 
 **Caveats**:
-- 10-second window: a determined user has ~10s of "freedom" between out-of-band change and reconciler revert. Compromise interval down to 2s once `netsh` parsing is fast.
+- 5-second window: a determined user has ~5s of "freedom" between out-of-band change and reconciler revert. Sub-second would need WFP COM, see above.
 - An Administrator can edit SQLite directly to add a "bypass" rule. Mitigation: SQLite file ACL'd to `LocalSystem` only (Phase 7c sibling).
 - WFP filtering bypasses (loading a kernel driver or hooking `netsh.exe` to no-op) defeat us. Out of scope.
 
 ### Browser hardening — force-install + lock the browser to the extension
 
-**Requirement (locked in)**: the Go installer auto-installs the extension AND configures Chrome / Edge so the browser cannot be effectively used *without* the extension active. This is Phase 7e, promoted to the **default install behavior** (not opt-in).
+**Requirement**: the Go installer auto-installs the extension AND configures Chrome / Edge so the browser cannot be effectively used *without* the extension active.
 
-How "the browser is unusable without the extension" is achieved (all via HKLM registry policies that the installer writes):
+**⚠ Correction (2026-05-10)**: Chrome / Edge stopped honoring `file://` update URLs in `ExtensionInstallForcelist` several years ago for security reasons. The original plan's `file:///C:/ProgramData/skfilter/extension/update.xml` approach **does not work**. Real options:
+
+| Option | What it costs | Trade-offs |
+| --- | --- | --- |
+| **(a) Publish to Chrome Web Store + Edge Add-ons** | $5 one-time Chrome developer account; free Edge account; ~1 week review on first submit | Public listing (anyone can find it). Updates push automatically. The simplest force-install story. |
+| **(b) Self-host signed `.crx` + `update.xml` over HTTPS** | A public HTTPS endpoint we control (Cloudflare Pages free tier, GitHub Pages, or any static host); generate a stable RSA key for `.crx` signing | Stays "private" but the URL is reachable from any browser, not really a secret. Updates require pushing a new `.crx`. |
+| **(c) Skip force-install — manual unpacked load** | Nothing | The user drags `extension/` into `chrome://extensions` Developer Mode once per browser. Survives until the user manually removes it. No policy lock. |
+
+**Decision pending user input**: which path to take. Options (a) and (b) both let us write `ExtensionInstallForcelist` with the public update URL, which then *does* enable the rest of the lockdown matrix below. Option (c) means the lockdown matrix becomes "if the extension happens to be loaded, lock down everything else" — still useful, less complete.
+
+The original plan called this "Phase 7e — moderate ~150 lines." Reality: ~50 lines of registry writes (trivial) + however much work option (a) or (b) entails, which is mostly account / hosting setup, not code.
+
+How "the browser is unusable without the extension" is achieved (all via HKLM registry policies the installer writes — these all work regardless of which (a)/(b)/(c) path was chosen, and don't depend on file:// URLs):
 
 | What we set | Registry path | Effect |
 | --- | --- | --- |
-| Force-install our extension | `HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist\1` = `<ext-id>;file:///C:/ProgramData/skfilter/extension/update.xml` (and the matching `\Microsoft\Edge\…` key) | Extension always installed, can't be removed or disabled by user |
+| Force-install our extension (only on options a/b) | `HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist\1` = `<ext-id>;https://updates.example.com/skfilter.xml` (and the matching `\Microsoft\Edge\…` key) | Extension always installed, can't be removed or disabled by user. Requires HTTPS update URL — file:// not honored. |
 | Restrict installable extensions to ours only | `…\Chrome\ExtensionInstallAllowlist\1` = `<ext-id>` and `…\ExtensionInstallBlocklist\1` = `*` | User can't install ANY other extension. Combined with forcelist, the only extension that can ever load is ours |
 | Block disabling extensions via the UI | `…\Chrome\ExtensionSettings` JSON value with our ID set to `installation_mode = "force_installed"` and `update_url = file:///…` | Disable button greyed out; toggle ignored |
 | Disable Incognito (which would skip extensions) | `…\Chrome\IncognitoModeAvailability` = `1` | "New Incognito Window" greyed out |
@@ -318,8 +334,8 @@ No user-mode software running on a machine the user has Administrator rights to 
 | 2 | `netsh advfirewall reset` | Admin | < 5 s, low knowledge | **Phase 7h** reconciler reverts; **7d** Group Policy makes the reset itself a no-op |
 | 3 | Stop service via `sc stop skfilter` / `services.msc` | Admin | < 30 s | **Phase 7b** watchdog restarts within 60 s; **Phase 7c** ACL requires SYSTEM elevation |
 | 4 | Stop both service AND scheduled-task watchdog | Admin → SYSTEM via `psexec -s` | ~2 min, requires `psexec` | Acknowledged limit. Both have ACLs requiring SYSTEM (Phase 7c). |
-| 5 | Edit SQLite directly | Admin → SYSTEM | ~1 min from SYSTEM shell | Phase 7c file ACL + **Phase 7i DB encryption** |
-| 6 | Delete `skfilter.db` to reset first-run, set new password | Admin → SYSTEM | ~1 min | **Phase 7i** |
+| 5 | Edit SQLite directly | Admin → SYSTEM | ~1 min from SYSTEM shell | **Phase 7c** file ACL only (Phase 7i dropped — see below). Accept that SYSTEM defeats the password gate. |
+| 6 | Delete `skfilter.db` to reset first-run, set new password | Admin → SYSTEM | ~1 min | **Phase 7c** file ACL. Same diminishing-returns reasoning. |
 | 7 | Replace `skfilter.exe` with a no-op binary, start the service | Admin → SYSTEM | ~5 min, requires preparation | **Phase 7j signature self-check** |
 | 8 | Stop the underlying `MpsSvc` (Windows Defender Firewall service) | Admin | < 30 s | Reconciler watches `MpsSvc` and `Start-Service`s it |
 | 9 | Boot into Safe Mode, delete `%PROGRAMDATA%\skfilter\` | Local Admin | ~3 min | **Phase 7k SafeBoot registration** |
@@ -332,14 +348,19 @@ No user-mode software running on a machine the user has Administrator rights to 
 
 ### Additional hardening phases
 
-#### Phase 7i — Encrypted SQLite
+#### Phase 7i — Encrypted SQLite — DROPPED (re-evaluated 2026-05-10)
 
-Closes #5 and #6.
+Original idea: derive a 32-byte key from the password via Argon2id, encrypt the SQLite DB at rest. Reasons it's NOT worth shipping:
 
-- On first-run setup, derive a 32-byte key from the password via Argon2id (salt + params stored in a sidecar `db.params`).
-- Encrypt the SQLite database file with that key (SQLCipher equivalent — or, since `modernc.org/sqlite` is pure-Go, encrypt sensitive cells row-level: `password_verifier`, `audit_payload`, `rules.ips_csv`).
-- Deleting the DB makes it irrecoverable. Reinstall is the only path; reinstall requires service uninstall → service uninstall requires the password.
-- **Trade-off**: forgotten password = full reinstall.
+1. **Pure-Go path is bad.** `modernc.org/sqlite` doesn't support SQLCipher. The "row-level encryption of sensitive cells" workaround is significantly more code (encrypt-on-write, decrypt-on-read for every column) and breaks SQLite query semantics — you can't `WHERE password_hash = ?` if the column is ciphertext, you have to decrypt every row in code. ~300 lines of glue, fragile.
+
+2. **CGO path defeats the rest of the stack.** Switching to CGO + SQLCipher loses the "single static EXE, no DLLs" property that makes deployment trivial.
+
+3. **Threat model has diminishing returns.** The bypass it would close (#5: SYSTEM-elevation user reads `password_hash` from DB) is gated by Phase 7c (SQLite file ACL'd to `LocalSystem` only). If an attacker has SYSTEM, they can also patch the binary, replace the whole DB, hook `netsh.exe`, or just run `netsh advfirewall reset`. Encryption-at-rest doesn't move the line meaningfully.
+
+**Decision**: rely on Phase 7c (file ACL) and accept that a SYSTEM shell defeats the password gate. The friction model still holds — getting to SYSTEM is the deliberate, knowing step we wanted in the first place.
+
+Bypass row #5 / #6 (above) is therefore mitigated only by Phase 7c, not Phase 7i. Update the table accordingly when re-reading.
 
 #### Phase 7j — Binary signature self-check
 

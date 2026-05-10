@@ -203,8 +203,8 @@ These are future work tracked in `Plan.md`:
 - **Phase 7a** service-process watchdog (poll firewall state every 30 s and self-repair) — currently the Phase 7h reconciler covers most of this in its 10 s tick, so 7a is mostly redundant. Still worth confirming.
 - **Phase 7b** scheduled-task watchdog
 - **Phase 7c** service ACL lockdown
-- **Phase 7e** force-install browser extension via Chrome / Edge / Firefox policies + lock the browser to ONLY the policy-installed extension (Incognito off, DevTools off, only-allowlisted extensions). This is the "browser cannot be used without the extension" requirement from the recent spec discussion.
-- **Phase 7i** encrypted SQLite (closes the "delete the DB to reset password" bypass)
+- **Phase 7e** force-install browser extension via Chrome / Edge / Firefox policies + lock the browser to ONLY the policy-installed extension (Incognito off, DevTools off, only-allowlisted extensions). The "browser cannot be used without the extension" requirement. **Caveat:** Chrome stopped honoring `file://` update URLs years ago. Force-install requires either (a) publishing the extension to the Chrome Web Store, (b) self-hosting an HTTPS update XML + signed `.crx`, or (c) skipping force-install and accepting manual unpacked-extension load. Decision pending.
+- **Phase 7i** encrypted SQLite — **dropped**. Pure-Go path is fragile, CGO path defeats the static-EXE property, and the bypass it would close (SYSTEM-elevation user reads `password_hash`) is already past the friction threshold we wanted. Phase 7c (file ACL) is the answer instead.
 - **Phase 7j** binary signature self-check
 - **Phase 7k** Safe Mode persistence
 - **Phase 7l–7o** Hyper-V/WSL2 disable, hosts-file ACL, BFE service watch, IPv6 coverage
