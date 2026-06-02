@@ -1,3 +1,9 @@
+> ## ⚠️ This project has moved
+>
+> **Windows-Filter has been superseded by [kiosk-exit-guard](https://github.com/Shalom-Karr/kiosk-exit-guard)**, where the firewall functionality was completed and shipped alongside the kiosk lockdown work. Active development happens there now — please use that repo for the latest version, issues, and releases.
+>
+> ---
+
 # skfilter
 
 A Windows-only allowlist firewall driven by `netsh advfirewall`, paired with a password-gated local HTTP dashboard at `http://localhost:8764` (loopback only — never reachable off the machine). Default-deny outbound; only domains you've explicitly added can be reached. A companion browser extension redirects blocked navigations to the dashboard's "Request access" page.
